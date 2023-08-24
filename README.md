@@ -18,5 +18,5 @@ PART_SIZE=1GB # ALLowed sizes 500M,1GB,2GB (1GB is defualt)
 ```
 
 - **-path**  here you can pass single file or folder path.
-- **-destination** is output path where fiels will  be saved.
+- **-destination** is remote output path where files will  be saved.
 - **-ext**  will upload only matched extension  otherwise leave if you wanna upload all files in folder.
