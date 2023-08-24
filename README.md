@@ -1,4 +1,4 @@
-<h1 align="center"> Teldrive Upload</h1>
+<h1 align="center">Teldrive Upload</h1>
 
 **Upload file parts concurrentlly  in multiple threads to get faster uploads.Default is 4.**
 ### How To Use
