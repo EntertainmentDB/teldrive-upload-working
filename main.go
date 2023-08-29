@@ -19,7 +19,8 @@ import (
 	"sync"
 
 	"flag"
-	"uploader/rest"
+
+	"github.com/rclone/rclone/lib/rest"
 
 	"github.com/joho/godotenv"
 	"github.com/schollz/progressbar/v3"
