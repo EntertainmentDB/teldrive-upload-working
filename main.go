@@ -310,7 +310,7 @@ func createRemoteDir(httpClient *rest.Client, path string) error {
 
 	opts := rest.Opts{
 		Method: "POST",
-		Path:   "/api/files/makekdir",
+		Path:   "/api/files/makedir",
 	}
 
 	if len(path) == 0 || path[0] != '/' {
