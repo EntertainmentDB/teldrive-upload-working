@@ -32,7 +32,7 @@ type Config struct {
 	ApiURL       string
 	SessionToken string
 	PartSize     int64
-	numWorkers 	 int64
+	Workers      int
 }
 
 type UploadPartOut struct {
@@ -106,11 +106,17 @@ func loadConfigFromEnv() (*Config, error) {
 		return nil, err
 	}
 
+	workers := 4
+
+	if os.Getenv("WORKERS") != "" {
+		workers, _ = strconv.Atoi(os.Getenv("WORKERS"))
+	}
+
 	config := &Config{
 		ApiURL:       os.Getenv("API_URL"),
 		SessionToken: os.Getenv("SESSION_TOKEN"),
 		PartSize:     partSizeBytes,
-		NumWorkers: os.Getenv("NUMWORKERS"),
+		Workers:      workers,
 	}
 
 	return config, nil
@@ -127,7 +133,7 @@ func (pr *ProgressReader) Read(p []byte) (n int, err error) {
 	return
 }
 
-func uploadFile(httpClient *rest.Client, filePath string, destDir string, partSize int64, numWorkers int64) error {
+func uploadFile(httpClient *rest.Client, filePath string, destDir string, partSize int64, numWorkers int) error {
 
 	// Open the file to be uploaded
 	file, err := os.Open(filePath)
@@ -394,13 +400,13 @@ func main() {
 
 		// Iterate over filtered files in the directory and upload them
 		for _, file := range filteredFiles {
-			if err := uploadFile(httpClient, file, *destDir, config.PartSize, config.NumWorkers); err != nil {
+			if err := uploadFile(httpClient, file, *destDir, config.PartSize, config.Workers); err != nil {
 				fmt.Println("Error uploading file:", err)
 			}
 		}
 	} else {
 		// Upload the single file
-		if err := uploadFile(httpClient, *sourcePath, *destDir, config.PartSize, config.NumWorkers); err != nil {
+		if err := uploadFile(httpClient, *sourcePath, *destDir, config.PartSize, config.Workers); err != nil {
 			fmt.Println("Error uploading file:", err)
 		}
 	}
