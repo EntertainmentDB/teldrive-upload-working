@@ -32,6 +32,7 @@ type Config struct {
 	ApiURL       string
 	SessionToken string
 	PartSize     int64
+	numWorkers 	 int64
 }
 
 type UploadPartOut struct {
@@ -109,6 +110,7 @@ func loadConfigFromEnv() (*Config, error) {
 		ApiURL:       os.Getenv("API_URL"),
 		SessionToken: os.Getenv("SESSION_TOKEN"),
 		PartSize:     partSizeBytes,
+		NumWorkers: os.Getenv("NUMWORKERS"),
 	}
 
 	return config, nil
@@ -125,7 +127,7 @@ func (pr *ProgressReader) Read(p []byte) (n int, err error) {
 	return
 }
 
-func uploadFile(httpClient *rest.Client, filePath string, destDir string, partSize int64) error {
+func uploadFile(httpClient *rest.Client, filePath string, destDir string, partSize int64, numWorkers int64) error {
 
 	// Open the file to be uploaded
 	file, err := os.Open(filePath)
@@ -157,7 +159,7 @@ func uploadFile(httpClient *rest.Client, filePath string, destDir string, partSi
 
 	uploadURL := fmt.Sprintf("/api/uploads/%s", hashString)
 
-	numWorkers := 4
+	_numWorkers := numWorkers
 
 	var wg sync.WaitGroup
 
@@ -168,7 +170,7 @@ func uploadFile(httpClient *rest.Client, filePath string, destDir string, partSi
 
 	uploadedParts := make(chan UploadPartOut, numParts)
 
-	concurrentWorkers := make(chan struct{}, numWorkers)
+	concurrentWorkers := make(chan struct{}, _numWorkers)
 
 	bar := progressbar.DefaultBytes(
 		fileSize,
@@ -392,13 +394,13 @@ func main() {
 
 		// Iterate over filtered files in the directory and upload them
 		for _, file := range filteredFiles {
-			if err := uploadFile(httpClient, file, *destDir, config.PartSize); err != nil {
+			if err := uploadFile(httpClient, file, *destDir, config.PartSize, config.NumWorkers); err != nil {
 				fmt.Println("Error uploading file:", err)
 			}
 		}
 	} else {
 		// Upload the single file
-		if err := uploadFile(httpClient, *sourcePath, *destDir, config.PartSize); err != nil {
+		if err := uploadFile(httpClient, *sourcePath, *destDir, config.PartSize, config.NumWorkers); err != nil {
 			fmt.Println("Error uploading file:", err)
 		}
 	}
