@@ -64,7 +64,6 @@ type CreateDirRequest struct {
 }
 
 func fileSizeToBytes(sizeStr string) (int64, error) {
-
 	match := sizeRegex.FindStringSubmatch(strings.ToLower(sizeStr))
 	if len(match) != 4 {
 		return 0, fmt.Errorf("invalid format: %s", sizeStr)
@@ -101,7 +100,6 @@ func loadConfigFromEnv() (*Config, error) {
 	}
 
 	partSizeBytes, err := fileSizeToBytes(partSize)
-
 	if err != nil {
 		return nil, err
 	}
@@ -134,8 +132,6 @@ func (pr *ProgressReader) Read(p []byte) (n int, err error) {
 }
 
 func uploadFile(httpClient *rest.Client, filePath string, destDir string, partSize int64, numWorkers int) error {
-
-	// Open the file to be uploaded
 	file, err := os.Open(filePath)
 	if err != nil {
 		return err
@@ -152,20 +148,14 @@ func uploadFile(httpClient *rest.Client, filePath string, destDir string, partSi
 	mimeType := http.DetectContentType(buffer)
 
 	fileInfo, _ := file.Stat()
-
 	fileSize := fileInfo.Size()
-
 	fileName := filepath.Base(filePath)
-
 	input := fmt.Sprintf("%s:%s:%d", fileName, destDir, fileSize)
 
 	hash := md5.Sum([]byte(input))
-
 	hashString := hex.EncodeToString(hash[:])
 
 	uploadURL := fmt.Sprintf("/api/uploads/%s", hashString)
-
-	_numWorkers := numWorkers
 
 	var wg sync.WaitGroup
 
@@ -175,13 +165,9 @@ func uploadFile(httpClient *rest.Client, filePath string, destDir string, partSi
 	}
 
 	uploadedParts := make(chan UploadPartOut, numParts)
+	concurrentWorkers := make(chan struct{}, numWorkers)
 
-	concurrentWorkers := make(chan struct{}, _numWorkers)
-
-	bar := progressbar.DefaultBytes(
-		fileSize,
-		fileName,
-	)
+	bar := progressbar.DefaultBytes(fileSize, fileName)
 
 	go func() {
 		wg.Wait()
@@ -231,7 +217,6 @@ func uploadFile(httpClient *rest.Client, filePath string, destDir string, partSi
 			}}
 
 			contentLength := end - start
-
 			reader := io.LimitReader(pr, contentLength)
 
 			opts := rest.Opts{
@@ -248,7 +233,6 @@ func uploadFile(httpClient *rest.Client, filePath string, destDir string, partSi
 			}
 
 			var part UploadPartOut
-
 			resp, err := httpClient.CallJSON(context.TODO(), &opts, nil, &part)
 
 			if err != nil {
@@ -259,7 +243,6 @@ func uploadFile(httpClient *rest.Client, filePath string, destDir string, partSi
 			if resp.StatusCode == 200 {
 				uploadedParts <- part
 			}
-
 		}(i, start, end)
 	}
 
@@ -315,7 +298,6 @@ func uploadFile(httpClient *rest.Client, filePath string, destDir string, partSi
 }
 
 func createRemoteDir(httpClient *rest.Client, path string) error {
-
 	opts := rest.Opts{
 		Method: "POST",
 		Path:   "/api/files/makedir",
@@ -337,26 +319,47 @@ func createRemoteDir(httpClient *rest.Client, path string) error {
 	return nil
 }
 
+func uploadFilesInDirectory(httpClient *rest.Client, sourcePath string, destDir string, partSize int64, numWorkers int) error {
+	entries, err := os.ReadDir(sourcePath)
+	if err != nil {
+		return err
+	}
+
+	for _, entry := range entries {
+		fullPath := filepath.Join(sourcePath, entry.Name())
+
+		if entry.IsDir() {
+			subDir := filepath.Join(destDir, entry.Name())
+			err := createRemoteDir(httpClient, subDir)
+			if err != nil {
+				return err
+			}
+			err = uploadFilesInDirectory(httpClient, fullPath, subDir, partSize, numWorkers)
+			if err != nil {
+				return err
+			}
+		} else {
+			err := uploadFile(httpClient, fullPath, destDir, partSize, numWorkers)
+			if err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
 func main() {
 	sourcePath := flag.String("path", "", "File or directory path to upload")
-	destDir := flag.String("destination", "", "Destination directory for uploaded files")
-	extensionPattern := flag.String("ext", "", "File extension pattern to filter files (e.g., '.txt')")
+	destDir := flag.String("dest", "", "Remote directory for uploaded files")
 	flag.Parse()
 
 	if *sourcePath == "" || *destDir == "" {
-		fmt.Println("Usage: ./uploader -path <file_or_directory_path> -destination <destination_directory> [-ext <extension_pattern>]")
+		fmt.Println("Usage: ./uploader -path <file_or_directory_path> -dest <remote_directory>")
 		return
 	}
 
 	config, err := loadConfigFromEnv()
 
-	if err != nil {
-		fmt.Println("Error:", err)
-		return
-	}
-
-	// Check if the provided path is a directory or a file
-	fileInfo, err := os.Stat(*sourcePath)
 	if err != nil {
 		fmt.Println("Error:", err)
 		return
@@ -376,39 +379,19 @@ func main() {
 		return
 	}
 
-	if fileInfo.IsDir() {
-		// Upload all files in the directory
-		files, err := filepath.Glob(filepath.Join(*sourcePath, "*"))
-		if err != nil {
-			fmt.Println("Error:", err)
-			return
-		}
-
-		// Filter files based on extension pattern if provided
-		var filteredFiles []string
-		if *extensionPattern != "" {
-			extensionRegex := regexp.MustCompile(fmt.Sprintf(`\%s$`, regexp.QuoteMeta(*extensionPattern)))
-			for _, file := range files {
-				if extensionRegex.MatchString(filepath.Ext(file)) {
-					filteredFiles = append(filteredFiles, file)
-				}
+	if fileInfo, err := os.Stat(*sourcePath); err == nil {
+		if fileInfo.IsDir() {
+			err := uploadFilesInDirectory(httpClient, *sourcePath, *destDir, config.PartSize, config.Workers)
+			if err != nil {
+				fmt.Println("Error uploading files:", err)
 			}
 		} else {
-			// If no extension pattern is provided, upload all files in the directory
-			filteredFiles = files
-		}
-
-		// Iterate over filtered files in the directory and upload them
-		for _, file := range filteredFiles {
-			if err := uploadFile(httpClient, file, *destDir, config.PartSize, config.Workers); err != nil {
+			if err := uploadFile(httpClient, *sourcePath, *destDir, config.PartSize, config.Workers); err != nil {
 				fmt.Println("Error uploading file:", err)
 			}
 		}
 	} else {
-		// Upload the single file
-		if err := uploadFile(httpClient, *sourcePath, *destDir, config.PartSize, config.Workers); err != nil {
-			fmt.Println("Error uploading file:", err)
-		}
+		fmt.Println("Error:", err)
 	}
 
 	fmt.Println("Uploads complete!")
