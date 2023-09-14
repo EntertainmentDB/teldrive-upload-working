@@ -17,6 +17,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"flag"
 
@@ -167,12 +168,27 @@ func uploadFile(httpClient *rest.Client, filePath string, destDir string, partSi
 	uploadedParts := make(chan UploadPartOut, numParts)
 	concurrentWorkers := make(chan struct{}, numWorkers)
 
-	bar := progressbar.DefaultBytes(fileSize, fileName)
+	bar := progressbar.NewOptions64(fileSize,
+		progressbar.OptionSetWriter(os.Stderr),
+		progressbar.OptionEnableColorCodes(true),
+		progressbar.OptionShowBytes(true),
+		progressbar.OptionSetWidth(10),
+		progressbar.OptionThrottle(65*time.Millisecond),
+		progressbar.OptionSetDescription(fileName),
+		progressbar.OptionSetTheme(progressbar.Theme{
+			Saucer:        "[green]=[reset]",
+			SaucerHead:    "[green]>[reset]",
+			SaucerPadding: " ",
+			BarStart:      "[",
+			BarEnd:        "]",
+		}),
+		progressbar.OptionFullWidth(),
+		progressbar.OptionSetRenderBlankState(true))
 
 	go func() {
 		wg.Wait()
 		close(uploadedParts)
-		bar.Clear()
+		bar.Finish()
 		bar.Close()
 	}()
 
@@ -330,6 +346,7 @@ func uploadFilesInDirectory(httpClient *rest.Client, sourcePath string, destDir 
 
 		if entry.IsDir() {
 			subDir := filepath.Join(destDir, entry.Name())
+			subDir = strings.ReplaceAll(subDir, "\\", "/")
 			err := createRemoteDir(httpClient, subDir)
 			if err != nil {
 				return err
@@ -339,7 +356,7 @@ func uploadFilesInDirectory(httpClient *rest.Client, sourcePath string, destDir 
 				return err
 			}
 		} else {
-			err := uploadFile(httpClient, fullPath, destDir, partSize, numWorkers)
+			err := uploadFile(httpClient, fullPath, strings.ReplaceAll(destDir, "\\", "/"), partSize, numWorkers)
 			if err != nil {
 				return err
 			}
