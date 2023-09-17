@@ -16,9 +16,8 @@ WORKERS=4 # Number of current workers to use when uploading multi-parts of a big
 - Download release binary of teldrive upload from releases section.
 
 ```shell
-./uploader -path "" -destination "" -ext ".txt"
+./uploader -path "" -dest "" -ext ".txt"
 ```
 
 - **-path**  here you can pass single file or folder path.
-- **-destination** is remote output path where files will  be saved.
-- **-ext**  will upload only matched extension  otherwise leave if you wanna upload all files in folder.
+- **-dest** is remote output path where files will  be saved.
