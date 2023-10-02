@@ -18,7 +18,6 @@ WORKERS=4 # Number of current workers to use when uploading multi-parts of a big
 
 ```shell
 ./uploader -path "" -dest ""
-./uploader -path "" -dest ""
 ```
 
 - **-path**  here you can pass single file or folder path.
