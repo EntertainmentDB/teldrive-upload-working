@@ -5,14 +5,13 @@ import (
 	"crypto/md5"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
-	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -21,19 +20,30 @@ import (
 
 	"flag"
 
+	"github.com/kelseyhightower/envconfig"
+	"github.com/rclone/rclone/fs"
+	"github.com/rclone/rclone/fs/fserrors"
+	"github.com/rclone/rclone/lib/pacer"
 	"github.com/rclone/rclone/lib/rest"
 
 	"github.com/joho/godotenv"
 	"github.com/schollz/progressbar/v3"
 )
 
-var sizeRegex = regexp.MustCompile(`(?i)^(\d+(\.\d+)?)\s*([KMGT]B|bytes?)$`)
+var Info = log.New(os.Stdout, "\u001b[34mINFO: \u001B[0m", log.LstdFlags|log.Lshortfile)
+
+var Warning = log.New(os.Stdout, "\u001b[33mWARNING: \u001B[0m", log.LstdFlags|log.Lshortfile)
+
+var Error = log.New(os.Stdout, "\u001b[31mERROR: \u001b[0m", log.LstdFlags|log.Lshortfile)
+
+var Debug = log.New(os.Stdout, "\u001b[36mDEBUG: \u001B[0m", log.LstdFlags|log.Lshortfile)
 
 type Config struct {
-	ApiURL       string
-	SessionToken string
-	PartSize     int64
-	Workers      int
+	ApiURL       string        `envconfig:"API_URL" required:"true"`
+	SessionToken string        `envconfig:"SESSION_TOKEN" required:"true"`
+	PartSize     fs.SizeSuffix `envconfig:"PART_SIZE"`
+	Workers      int           `envconfig:"WORKERS" default:"4"`
+	ChannelID    int64         `envconfig:"CHANNEL_ID"`
 }
 
 type UploadPartOut struct {
@@ -64,61 +74,71 @@ type CreateDirRequest struct {
 	Path string `json:"path"`
 }
 
-func fileSizeToBytes(sizeStr string) (int64, error) {
-	match := sizeRegex.FindStringSubmatch(strings.ToLower(sizeStr))
-	if len(match) != 4 {
-		return 0, fmt.Errorf("invalid format: %s", sizeStr)
-	}
+type MetadataRequestOptions struct {
+	PerPage       uint64
+	SearchField   string
+	Search        string
+	NextPageToken string
+}
 
-	size, err := strconv.ParseFloat(match[1], 64)
-	if err != nil {
-		return 0, err
-	}
+type FileInfo struct {
+	Id       string `json:"id"`
+	Name     string `json:"name"`
+	MimeType string `json:"mimeType"`
+	Size     int64  `json:"size"`
+	ParentId string `json:"parentId"`
+	Type     string `json:"type"`
+	ModTime  string `json:"updatedAt"`
+}
 
-	unit := match[3]
-	switch unit {
-	case "kb", "kilobyte", "kilobytes":
-		return int64(size * 1024), nil
-	case "mb", "megabyte", "megabytes":
-		return int64(size * 1024 * 1024), nil
-	case "gb", "gigabyte", "gigabytes":
-		return int64(size * 1000 * 1024 * 1024), nil
-	default:
-		return 0, fmt.Errorf("unsupported unit: %s", unit)
+type ReadMetadataResponse struct {
+	Files         []FileInfo `json:"results"`
+	NextPageToken string     `json:"nextPageToken,omitempty"`
+}
+
+type Uploader struct {
+	http       *rest.Client
+	numWorkers int
+	partSize   int64
+	channelID  int64
+	pacer      *fs.Pacer
+	ctx        context.Context
+}
+
+var retryErrorCodes = []int{
+	429, // Too Many Requests.
+	500, // Internal Server Error
+	502, // Bad Gateway
+	503, // Service Unavailable
+	504, // Gateway Timeout
+	509, // Bandwidth Limit Exceeded
+}
+
+func shouldRetry(ctx context.Context, resp *http.Response, err error) (bool, error) {
+	if fserrors.ContextError(ctx, &err) {
+		return false, err
 	}
+	return fserrors.ShouldRetry(err) || fserrors.ShouldRetryHTTP(resp, retryErrorCodes), err
 }
 
 func loadConfigFromEnv() (*Config, error) {
+
+	var config Config
+
 	err := godotenv.Load("upload.env")
 	if err != nil {
 		return nil, err
 	}
 
-	partSize := "1GB"
-
-	if os.Getenv("PART_SIZE") != "" {
-		partSize = os.Getenv("PART_SIZE")
-	}
-
-	partSizeBytes, err := fileSizeToBytes(partSize)
+	err = envconfig.Process("", &config)
 	if err != nil {
-		return nil, err
+		panic(err)
+	}
+	if config.PartSize == 0 {
+		config.PartSize = 1000 * fs.Mebi
 	}
 
-	workers := 4
-
-	if os.Getenv("WORKERS") != "" {
-		workers, _ = strconv.Atoi(os.Getenv("WORKERS"))
-	}
-
-	config := &Config{
-		ApiURL:       os.Getenv("API_URL"),
-		SessionToken: os.Getenv("SESSION_TOKEN"),
-		PartSize:     partSizeBytes,
-		Workers:      workers,
-	}
-
-	return config, nil
+	return &config, nil
 }
 
 type ProgressReader struct {
@@ -132,7 +152,7 @@ func (pr *ProgressReader) Read(p []byte) (n int, err error) {
 	return
 }
 
-func uploadFile(httpClient *rest.Client, filePath string, destDir string, partSize int64, numWorkers int) error {
+func (u *Uploader) uploadFile(filePath string, destDir string) error {
 	file, err := os.Open(filePath)
 	if err != nil {
 		return err
@@ -142,7 +162,7 @@ func uploadFile(httpClient *rest.Client, filePath string, destDir string, partSi
 	buffer := make([]byte, 512)
 	_, err = file.Read(buffer)
 	if err != nil {
-		fmt.Println("Error reading file:", err)
+		Error.Println("Error reading file:", err)
 		return nil
 	}
 
@@ -160,13 +180,13 @@ func uploadFile(httpClient *rest.Client, filePath string, destDir string, partSi
 
 	var wg sync.WaitGroup
 
-	numParts := fileSize / partSize
-	if fileSize%partSize != 0 {
+	numParts := fileSize / u.partSize
+	if fileSize%u.partSize != 0 {
 		numParts++
 	}
 
 	uploadedParts := make(chan UploadPartOut, numParts)
-	concurrentWorkers := make(chan struct{}, numWorkers)
+	concurrentWorkers := make(chan struct{}, u.numWorkers)
 
 	bar := progressbar.NewOptions64(fileSize,
 		progressbar.OptionSetWriter(os.Stderr),
@@ -193,8 +213,8 @@ func uploadFile(httpClient *rest.Client, filePath string, destDir string, partSi
 	}()
 
 	for i := int64(0); i < numParts; i++ {
-		start := i * partSize
-		end := start + partSize
+		start := i * u.partSize
+		end := start + u.partSize
 		if end > fileSize {
 			end = fileSize
 		}
@@ -210,7 +230,7 @@ func uploadFile(httpClient *rest.Client, filePath string, destDir string, partSi
 
 			partFile, err := os.Open(filePath)
 			if err != nil {
-				fmt.Println("Error:", err)
+				Error.Println("Error:", err)
 				return
 			}
 			defer partFile.Close()
@@ -218,7 +238,7 @@ func uploadFile(httpClient *rest.Client, filePath string, destDir string, partSi
 			_, err = partFile.Seek(start, io.SeekStart)
 
 			if err != nil {
-				fmt.Println("Error:", err)
+				Error.Println("Error:", err)
 				return
 			}
 
@@ -240,19 +260,19 @@ func uploadFile(httpClient *rest.Client, filePath string, destDir string, partSi
 				Path:          uploadURL,
 				Body:          reader,
 				ContentLength: &contentLength,
-				ContentType:   "application/octet-stream",
 				Parameters: url.Values{
 					"fileName":   []string{name},
 					"partNo":     []string{strconv.FormatInt(partNumber+1, 10)},
 					"totalparts": []string{strconv.FormatInt(int64(numParts), 10)},
+					"channelId":  []string{strconv.FormatInt(int64(u.channelID), 10)},
 				},
 			}
 
 			var part UploadPartOut
-			resp, err := httpClient.CallJSON(context.TODO(), &opts, nil, &part)
+			resp, err := u.http.CallJSON(context.TODO(), &opts, nil, &part)
 
 			if err != nil {
-				fmt.Println("Error:", err)
+				Error.Println("Error:", err)
 				return
 			}
 
@@ -268,7 +288,7 @@ func uploadFile(httpClient *rest.Client, filePath string, destDir string, partSi
 	}
 
 	if len(parts) != int(numParts) {
-		return errors.New("upload failed")
+		return fmt.Errorf("upload failed: %s", fileName)
 	}
 
 	sort.Slice(parts, func(i, j int) bool {
@@ -287,7 +307,6 @@ func uploadFile(httpClient *rest.Client, filePath string, destDir string, partSi
 	json.Marshal(filePayload)
 
 	if err != nil {
-		fmt.Println("Error marshaling JSON:", err)
 		return err
 	}
 
@@ -296,24 +315,28 @@ func uploadFile(httpClient *rest.Client, filePath string, destDir string, partSi
 		Path:   "/api/files",
 	}
 
-	resp, err := httpClient.CallJSON(context.TODO(), &opts, &filePayload, nil)
+	err = u.pacer.Call(func() (bool, error) {
+		resp, err := u.http.CallJSON(u.ctx, &opts, &filePayload, nil)
+		return shouldRetry(u.ctx, resp, err)
+	})
 
-	if resp.StatusCode != 200 {
-		fmt.Println("Request failed with status code:", resp.StatusCode)
+	if err != nil {
 		return err
 	}
 
-	resp, err = httpClient.CallJSON(context.TODO(), &rest.Opts{Method: "DELETE", Path: uploadURL}, nil, nil)
+	err = u.pacer.Call(func() (bool, error) {
+		resp, err := u.http.CallJSON(u.ctx, &rest.Opts{Method: "DELETE", Path: uploadURL}, nil, nil)
+		return shouldRetry(u.ctx, resp, err)
+	})
 
-	if resp.StatusCode != 200 {
-		fmt.Println("Request failed with status code:", resp.StatusCode)
+	if err != nil {
 		return err
 	}
 
 	return nil
 }
 
-func createRemoteDir(httpClient *rest.Client, path string) error {
+func (u *Uploader) createRemoteDir(path string) error {
 	opts := rest.Opts{
 		Method: "POST",
 		Path:   "/api/files/makedir",
@@ -327,7 +350,10 @@ func createRemoteDir(httpClient *rest.Client, path string) error {
 		Path: path,
 	}
 
-	_, err := httpClient.CallJSON(context.TODO(), &opts, &mkdir, nil)
+	err := u.pacer.Call(func() (bool, error) {
+		resp, err := u.http.CallJSON(u.ctx, &opts, &mkdir, nil)
+		return shouldRetry(u.ctx, resp, err)
+	})
 
 	if err != nil {
 		return err
@@ -335,8 +361,84 @@ func createRemoteDir(httpClient *rest.Client, path string) error {
 	return nil
 }
 
-func uploadFilesInDirectory(httpClient *rest.Client, sourcePath string, destDir string, partSize int64, numWorkers int) error {
+func (u *Uploader) readMetaDataForPath(path string, options *MetadataRequestOptions) (*ReadMetadataResponse, error) {
+
+	opts := rest.Opts{
+		Method: "GET",
+		Path:   "/api/files",
+		Parameters: url.Values{
+			"path":          []string{path},
+			"perPage":       []string{strconv.FormatUint(options.PerPage, 10)},
+			"sort":          []string{"name"},
+			"order":         []string{"asc"},
+			"op":            []string{"list"},
+			"nextPageToken": []string{options.NextPageToken},
+		},
+	}
+	var err error
+	var info ReadMetadataResponse
+	var resp *http.Response
+
+	err = u.pacer.Call(func() (bool, error) {
+		resp, err = u.http.CallJSON(u.ctx, &opts, nil, &info)
+		return shouldRetry(u.ctx, resp, err)
+	})
+
+	if err != nil && resp.StatusCode == 404 {
+		return nil, fs.ErrorDirNotFound
+	}
+
+	if err != nil {
+		return nil, err
+	}
+
+	return &info, nil
+}
+
+func (u *Uploader) list(path string) (files []FileInfo, err error) {
+
+	var limit uint64 = 500
+	var nextPageToken string = ""
+	for {
+		opts := &MetadataRequestOptions{
+			PerPage:       limit,
+			NextPageToken: nextPageToken,
+		}
+
+		info, err := u.readMetaDataForPath(path, opts)
+		if err != nil {
+			return nil, err
+		}
+
+		files = append(files, info.Files...)
+
+		nextPageToken = info.NextPageToken
+		if nextPageToken == "" {
+			break
+		}
+	}
+	return files, nil
+}
+
+func (u *Uploader) checkFileExists(name string, files []FileInfo) bool {
+	for _, item := range files {
+		if item.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
+func (u *Uploader) uploadFilesInDirectory(sourcePath string, destDir string) error {
 	entries, err := os.ReadDir(sourcePath)
+	if err != nil {
+		return err
+	}
+
+	destDir = strings.ReplaceAll(destDir, "\\", "/")
+
+	files, err := u.list(destDir)
+
 	if err != nil {
 		return err
 	}
@@ -347,18 +449,22 @@ func uploadFilesInDirectory(httpClient *rest.Client, sourcePath string, destDir 
 		if entry.IsDir() {
 			subDir := filepath.Join(destDir, entry.Name())
 			subDir = strings.ReplaceAll(subDir, "\\", "/")
-			err := createRemoteDir(httpClient, subDir)
+			err := u.createRemoteDir(subDir)
 			if err != nil {
-				return err
+				Error.Fatalln(err)
 			}
-			err = uploadFilesInDirectory(httpClient, fullPath, subDir, partSize, numWorkers)
-			if err != nil {
-				return err
-			}
+			err = u.uploadFilesInDirectory(fullPath, subDir)
+			Error.Println(err)
 		} else {
-			err := uploadFile(httpClient, fullPath, strings.ReplaceAll(destDir, "\\", "/"), partSize, numWorkers)
-			if err != nil {
-				return err
+
+			exists := u.checkFileExists(entry.Name(), files)
+			if !exists {
+				err := u.uploadFile(fullPath, destDir)
+				if err != nil {
+					Error.Println("upload failed:", entry.Name(), err)
+				}
+			} else {
+				Info.Println("file exists:", entry.Name())
 			}
 		}
 	}
@@ -378,8 +484,7 @@ func main() {
 	config, err := loadConfigFromEnv()
 
 	if err != nil {
-		fmt.Println("Error:", err)
-		return
+		Error.Fatalln(err)
 	}
 
 	authCookie := &http.Cookie{
@@ -387,29 +492,42 @@ func main() {
 		Value: config.SessionToken,
 	}
 
+	ctx := context.Background()
+
 	httpClient := rest.NewClient(http.DefaultClient).SetRoot(config.ApiURL).SetCookie(authCookie)
 
-	err = createRemoteDir(httpClient, *destDir)
+	pacer := fs.NewPacer(ctx, pacer.NewDefault(pacer.MinSleep(400*time.Millisecond),
+		pacer.MaxSleep(5*time.Second), pacer.DecayConstant(2), pacer.AttackConstant(0)))
+
+	uploader := &Uploader{
+		http:       httpClient,
+		numWorkers: config.Workers,
+		channelID:  config.ChannelID,
+		partSize:   int64(config.PartSize),
+		pacer:      pacer,
+		ctx:        ctx,
+	}
+
+	err = uploader.createRemoteDir(*destDir)
 
 	if err != nil {
-		fmt.Println("Error:", err)
-		return
+		Error.Fatalln(err)
 	}
 
 	if fileInfo, err := os.Stat(*sourcePath); err == nil {
 		if fileInfo.IsDir() {
-			err := uploadFilesInDirectory(httpClient, *sourcePath, *destDir, config.PartSize, config.Workers)
+			err := uploader.uploadFilesInDirectory(*sourcePath, *destDir)
 			if err != nil {
-				fmt.Println("Error uploading files:", err)
+				Error.Println("upload failed:", err)
 			}
 		} else {
-			if err := uploadFile(httpClient, *sourcePath, *destDir, config.PartSize, config.Workers); err != nil {
-				fmt.Println("Error uploading file:", err)
+			if err := uploader.uploadFile(*sourcePath, *destDir); err != nil {
+				Error.Println("upload failed:", err)
 			}
 		}
 	} else {
-		fmt.Println("Error:", err)
+		Error.Fatalln(err)
 	}
 
-	fmt.Println("Uploads complete!")
+	Info.Println("Uploads complete!")
 }

@@ -8,17 +8,17 @@
 
 ```shell
 API_URL="http://localhost:8000" # url of hosted app
-SESSION_TOKEN="" #user session token which can be fetched from teldrive app from cookies
-PART_SIZE=1GB # Allowed sizes 500MB,1GB,2GB (1GB is default)
+SESSION_TOKEN="" #user session token which can be fetched from teldrive app from cokies
+PART_SIZE=1000M # Same as Rclone Size Format
+CHANNEL_ID="" # Channel ID where files will be saved if not set default will be used which is set from UI
 WORKERS=4 # Number of current workers to use when uploading multi-parts of a big file, increase this to attain higher speeds with large files (4 is default)
 ```
 - Smaller part size will give max upload speed.
 - Download release binary of teldrive upload from releases section.
 
 ```shell
-./uploader -path "" -destination "" -ext ".txt"
+./uploader -path "" -dest ""
 ```
 
 - **-path**  here you can pass single file or folder path.
 - **-destination** is remote output path where files will  be saved.
-- **-ext**  will upload only matched extension  otherwise leave if you wanna upload all files in folder.
