@@ -62,12 +62,13 @@ type Part struct {
 }
 
 type FilePayload struct {
-	Name     string `json:"name"`
-	Type     string `json:"type"`
-	Parts    []Part `json:"parts,omitempty"`
-	MimeType string `json:"mimeType"`
-	Path     string `json:"path"`
-	Size     int64  `json:"size"`
+	Name      string `json:"name"`
+	Type      string `json:"type"`
+	Parts     []Part `json:"parts,omitempty"`
+	MimeType  string `json:"mimeType"`
+	Path      string `json:"path"`
+	Size      int64  `json:"size"`
+	ChannelID int64  `json:"channelId"`
 }
 
 type CreateDirRequest struct {
@@ -296,12 +297,13 @@ func (u *Uploader) uploadFile(filePath string, destDir string) error {
 	})
 
 	filePayload := FilePayload{
-		Name:     fileName,
-		Type:     "file",
-		Parts:    parts,
-		MimeType: mimeType,
-		Path:     destDir,
-		Size:     fileSize,
+		Name:      fileName,
+		Type:      "file",
+		Parts:     parts,
+		MimeType:  mimeType,
+		Path:      destDir,
+		Size:      fileSize,
+		ChannelID: u.channelID,
 	}
 
 	json.Marshal(filePayload)
