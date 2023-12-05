@@ -48,7 +48,7 @@ type Config struct {
 	ChannelID     int64         `envconfig:"CHANNEL_ID"`
 }
 
-type UploadPartOut struct {
+type PartFile struct {
 	ID         string `json:"id"`
 	Name       string `json:"name"`
 	PartId     int    `json:"partId"`
@@ -58,19 +58,23 @@ type UploadPartOut struct {
 	Size       int64  `json:"size"`
 }
 
-type Part struct {
+type FilePart struct {
 	ID     int64 `json:"id"`
 	PartNo int   `json:"partNo"`
 }
 
+type UploadFile struct {
+	Parts []PartFile `json:"parts,omitempty"`
+}
+
 type FilePayload struct {
-	Name      string `json:"name"`
-	Type      string `json:"type"`
-	Parts     []Part `json:"parts,omitempty"`
-	MimeType  string `json:"mimeType"`
-	Path      string `json:"path"`
-	Size      int64  `json:"size"`
-	ChannelID int64  `json:"channelId"`
+	Name      string     `json:"name"`
+	Type      string     `json:"type"`
+	Parts     []FilePart `json:"parts,omitempty"`
+	MimeType  string     `json:"mimeType"`
+	Path      string     `json:"path"`
+	Size      int64      `json:"size"`
+	ChannelID int64      `json:"channelId"`
 }
 
 type CreateDirRequest struct {
@@ -84,6 +88,7 @@ type MetadataRequestOptions struct {
 	NextPageToken string
 }
 
+// FileInfo represents a file when listing folder contents
 type FileInfo struct {
 	Id       string `json:"id"`
 	Name     string `json:"name"`
@@ -94,6 +99,7 @@ type FileInfo struct {
 	ModTime  string `json:"updatedAt"`
 }
 
+// ReadMetadataResponse is the response when listing folder contents
 type ReadMetadataResponse struct {
 	Files         []FileInfo `json:"results"`
 	NextPageToken string     `json:"nextPageToken,omitempty"`
@@ -181,6 +187,27 @@ func (u *Uploader) uploadFile(filePath string, destDir string, randomisePart boo
 
 	uploadURL := fmt.Sprintf("/api/uploads/%s", hashString)
 
+	var existingParts map[int]PartFile
+	var uploadFile UploadFile
+
+	if u.partSize < fileSize {
+		opts := rest.Opts{
+			Method: "GET",
+			Path:   uploadURL,
+		}
+
+		err := u.pacer.Call(func() (bool, error) {
+			resp, err := u.http.CallJSON(u.ctx, &opts, nil, &uploadFile)
+			return shouldRetry(u.ctx, resp, err)
+		})
+		if err == nil {
+			existingParts = make(map[int]PartFile, len(uploadFile.Parts))
+			for _, part := range uploadFile.Parts {
+				existingParts[part.PartNo] = part
+			}
+		}
+	}
+
 	var wg sync.WaitGroup
 
 	numParts := fileSize / u.partSize
@@ -188,10 +215,11 @@ func (u *Uploader) uploadFile(filePath string, destDir string, randomisePart boo
 		numParts++
 	}
 
-	uploadedParts := make(chan UploadPartOut, numParts)
+	uploadedParts := make(chan PartFile, numParts)
 	concurrentWorkers := make(chan struct{}, u.numWorkers)
 
 	bar := progressbar.NewOptions64(fileSize,
+		progressbar.OptionShowCount(),
 		progressbar.OptionSetWriter(os.Stderr),
 		progressbar.OptionEnableColorCodes(true),
 		progressbar.OptionShowBytes(true),
@@ -231,19 +259,31 @@ func (u *Uploader) uploadFile(filePath string, destDir string, randomisePart boo
 				<-concurrentWorkers
 			}()
 
-			partFile, err := os.Open(filePath)
+			file, err := os.Open(filePath)
 			if err != nil {
 				Error.Println("Error:", err)
 				return
 			}
-			defer partFile.Close()
+			defer file.Close()
+			if existing, ok := existingParts[int(partNumber)+1]; ok {
+				uploadedParts <- existing
+				bar.Add64(existing.Size)
+				return
+			}
 
-			_, err = partFile.Seek(start, io.SeekStart)
+			_, err = file.Seek(start, io.SeekStart)
 
 			if err != nil {
 				Error.Println("Error:", err)
 				return
 			}
+
+			pr := &ProgressReader{file, func(r int64) {
+				bar.Add64(r)
+			}}
+
+			contentLength := end - start
+			reader := io.LimitReader(pr, contentLength)
 
 			name := fileName
 
@@ -253,13 +293,6 @@ func (u *Uploader) uploadFile(filePath string, destDir string, randomisePart boo
 			} else if numParts > 1 {
 				name = fmt.Sprintf("%s.part.%03d", fileName, partNumber+1)
 			}
-
-			pr := &ProgressReader{partFile, func(r int64) {
-				bar.Add64(r)
-			}}
-
-			contentLength := end - start
-			reader := io.LimitReader(pr, contentLength)
 
 			opts := rest.Opts{
 				Method:        "POST",
@@ -274,8 +307,8 @@ func (u *Uploader) uploadFile(filePath string, destDir string, randomisePart boo
 				},
 			}
 
-			var part UploadPartOut
-			resp, err := u.http.CallJSON(context.TODO(), &opts, nil, &part)
+			var partFile PartFile
+			resp, err := u.http.CallJSON(context.TODO(), &opts, nil, &partFile)
 
 			if err != nil {
 				Error.Println("Error:", err)
@@ -283,14 +316,14 @@ func (u *Uploader) uploadFile(filePath string, destDir string, randomisePart boo
 			}
 
 			if resp.StatusCode == 200 {
-				uploadedParts <- part
+				uploadedParts <- partFile
 			}
 		}(i, start, end)
 	}
 
-	var parts []Part
+	var parts []FilePart
 	for uploadPart := range uploadedParts {
-		parts = append(parts, Part{ID: int64(uploadPart.PartId), PartNo: uploadPart.PartNo})
+		parts = append(parts, FilePart{ID: int64(uploadPart.PartId), PartNo: uploadPart.PartNo})
 	}
 
 	if len(parts) != int(numParts) {
