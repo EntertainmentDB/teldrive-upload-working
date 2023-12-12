@@ -45,6 +45,7 @@ type Config struct {
 	PartSize      fs.SizeSuffix `envconfig:"PART_SIZE"`
 	Workers       int           `envconfig:"WORKERS" default:"4"`
 	RandomisePart bool          `envconfig:"RANDOMISE_PART" default:"true"`
+	EncryptFiles  bool          `envconfig:"ENCRYPT_FILES" default:"true"`
 	ChannelID     int64         `envconfig:"CHANNEL_ID"`
 }
 
@@ -54,13 +55,16 @@ type PartFile struct {
 	PartId     int    `json:"partId"`
 	PartNo     int    `json:"partNo"`
 	TotalParts int    `json:"totalParts"`
-	ChannelID  int64  `json:"channelId"`
 	Size       int64  `json:"size"`
+	ChannelID  int64  `json:"channelId"`
+	Encrypted  bool   `json:"encrypted"`
+	Salt       string `json:"salt"`
 }
 
 type FilePart struct {
-	ID     int64 `json:"id"`
-	PartNo int   `json:"partNo"`
+	ID     int64  `json:"id"`
+	PartNo int    `json:"partNo"`
+	Salt   string `json:"salt"`
 }
 
 type UploadFile struct {
@@ -75,6 +79,7 @@ type FilePayload struct {
 	Path      string     `json:"path"`
 	Size      int64      `json:"size"`
 	ChannelID int64      `json:"channelId"`
+	Encrypted bool       `json:"encrypted"`
 }
 
 type CreateDirRequest struct {
@@ -106,12 +111,14 @@ type ReadMetadataResponse struct {
 }
 
 type Uploader struct {
-	http       *rest.Client
-	numWorkers int
-	partSize   int64
-	channelID  int64
-	pacer      *fs.Pacer
-	ctx        context.Context
+	http          *rest.Client
+	numWorkers    int
+	partSize      int64
+	encryptFiles  bool
+	randomisePart bool
+	channelID     int64
+	pacer         *fs.Pacer
+	ctx           context.Context
 }
 
 var retryErrorCodes = []int{
@@ -161,7 +168,33 @@ func (pr *ProgressReader) Read(p []byte) (n int, err error) {
 	return
 }
 
-func (u *Uploader) uploadFile(filePath string, destDir string, randomisePart bool) error {
+func (u *Uploader) checkFileExists(fileName string, path string) bool {
+	opts := rest.Opts{
+		Method: "GET",
+		Path:   "/api/files",
+		Parameters: url.Values{
+			"path": []string{path},
+			"op":   []string{"find"},
+			"name": []string{fileName},
+		},
+	}
+
+	var err error
+	var info ReadMetadataResponse
+	var resp *http.Response
+
+	err = u.pacer.Call(func() (bool, error) {
+		resp, err = u.http.CallJSON(u.ctx, &opts, nil, &info)
+		return shouldRetry(u.ctx, resp, err)
+	})
+	if err == nil && len(info.Files) > 0 {
+		return true
+	}
+
+	return false
+}
+
+func (u *Uploader) uploadFile(filePath string, destDir string) error {
 	file, err := os.Open(filePath)
 	if err != nil {
 		return err
@@ -180,6 +213,12 @@ func (u *Uploader) uploadFile(filePath string, destDir string, randomisePart boo
 	fileInfo, _ := file.Stat()
 	fileSize := fileInfo.Size()
 	fileName := filepath.Base(filePath)
+
+	if u.checkFileExists(fileName, destDir) {
+		Info.Println("file exists:", fileName)
+		return nil
+	}
+
 	input := fmt.Sprintf("%s:%s:%d", fileName, destDir, fileSize)
 
 	hash := md5.Sum([]byte(input))
@@ -210,13 +249,23 @@ func (u *Uploader) uploadFile(filePath string, destDir string, randomisePart boo
 
 	var wg sync.WaitGroup
 
-	numParts := fileSize / u.partSize
+	totalParts := fileSize / u.partSize
 	if fileSize%u.partSize != 0 {
-		numParts++
+		totalParts++
 	}
 
-	uploadedParts := make(chan PartFile, numParts)
+	uploadedParts := make(chan PartFile, totalParts)
 	concurrentWorkers := make(chan struct{}, u.numWorkers)
+
+	channelID := u.channelID
+
+	encryptFile := u.encryptFiles
+
+	if len(uploadFile.Parts) > 0 {
+		channelID = uploadFile.Parts[0].ChannelID
+
+		encryptFile = uploadFile.Parts[0].Encrypted
+	}
 
 	bar := progressbar.NewOptions64(fileSize,
 		progressbar.OptionShowCount(),
@@ -243,7 +292,7 @@ func (u *Uploader) uploadFile(filePath string, destDir string, randomisePart boo
 		bar.Close()
 	}()
 
-	for i := int64(0); i < numParts; i++ {
+	for i := int64(0); i < totalParts; i++ {
 		start := i * u.partSize
 		end := start + u.partSize
 		if end > fileSize {
@@ -287,10 +336,10 @@ func (u *Uploader) uploadFile(filePath string, destDir string, randomisePart boo
 
 			name := fileName
 
-			if randomisePart {
+			if u.randomisePart {
 				u1, _ := uuid.NewV4()
 				name = hex.EncodeToString(u1.Bytes())
-			} else if numParts > 1 {
+			} else if totalParts > 1 {
 				name = fmt.Sprintf("%s.part.%03d", fileName, partNumber+1)
 			}
 
@@ -300,10 +349,11 @@ func (u *Uploader) uploadFile(filePath string, destDir string, randomisePart boo
 				Body:          reader,
 				ContentLength: &contentLength,
 				Parameters: url.Values{
-					"fileName":   []string{name},
-					"partNo":     []string{strconv.FormatInt(partNumber+1, 10)},
-					"totalparts": []string{strconv.FormatInt(int64(numParts), 10)},
-					"channelId":  []string{strconv.FormatInt(int64(u.channelID), 10)},
+					"fileName": []string{name},
+					"partNo":   []string{strconv.FormatInt(partNumber+1, 10)},
+					// "totalparts": []string{strconv.FormatInt(int64(totalParts), 10)},
+					"channelId": []string{strconv.FormatInt(int64(channelID), 10)},
+					"encrypted": []string{strconv.FormatBool(encryptFile)},
 				},
 			}
 
@@ -314,8 +364,7 @@ func (u *Uploader) uploadFile(filePath string, destDir string, randomisePart boo
 				Error.Println("Error:", err)
 				return
 			}
-
-			if resp.StatusCode == 200 {
+			if resp.StatusCode == 201 {
 				uploadedParts <- partFile
 			}
 		}(i, start, end)
@@ -323,10 +372,10 @@ func (u *Uploader) uploadFile(filePath string, destDir string, randomisePart boo
 
 	var parts []FilePart
 	for uploadPart := range uploadedParts {
-		parts = append(parts, FilePart{ID: int64(uploadPart.PartId), PartNo: uploadPart.PartNo})
+		parts = append(parts, FilePart{ID: int64(uploadPart.PartId), Salt: uploadPart.Salt})
 	}
 
-	if len(parts) != int(numParts) {
+	if len(parts) != int(totalParts) {
 		return fmt.Errorf("upload failed: %s", fileName)
 	}
 
@@ -341,7 +390,8 @@ func (u *Uploader) uploadFile(filePath string, destDir string, randomisePart boo
 		MimeType:  mimeType,
 		Path:      destDir,
 		Size:      fileSize,
-		ChannelID: u.channelID,
+		ChannelID: channelID,
+		Encrypted: encryptFile,
 	}
 
 	json.Marshal(filePayload)
@@ -379,7 +429,7 @@ func (u *Uploader) uploadFile(filePath string, destDir string, randomisePart boo
 func (u *Uploader) createRemoteDir(path string) error {
 	opts := rest.Opts{
 		Method: "POST",
-		Path:   "/api/files/makedir",
+		Path:   "/api/files/directories",
 	}
 
 	if len(path) == 0 || path[0] != '/' {
@@ -460,7 +510,7 @@ func (u *Uploader) list(path string) (files []FileInfo, err error) {
 	return files, nil
 }
 
-func (u *Uploader) checkFileExists(name string, files []FileInfo) bool {
+func (u *Uploader) checkFileExistsInDirectory(name string, files []FileInfo) bool {
 	for _, item := range files {
 		if item.Name == name {
 			return true
@@ -469,7 +519,7 @@ func (u *Uploader) checkFileExists(name string, files []FileInfo) bool {
 	return false
 }
 
-func (u *Uploader) uploadFilesInDirectory(sourcePath string, destDir string, randomisePart bool) error {
+func (u *Uploader) uploadFilesInDirectory(sourcePath string, destDir string) error {
 	entries, err := os.ReadDir(sourcePath)
 	if err != nil {
 		return err
@@ -493,15 +543,15 @@ func (u *Uploader) uploadFilesInDirectory(sourcePath string, destDir string, ran
 			if err != nil {
 				Error.Fatalln(err)
 			}
-			err = u.uploadFilesInDirectory(fullPath, subDir, randomisePart)
+			err = u.uploadFilesInDirectory(fullPath, subDir)
 			if err != nil {
 				Error.Println(err)
 			}
 		} else {
 
-			exists := u.checkFileExists(entry.Name(), files)
+			exists := u.checkFileExistsInDirectory(entry.Name(), files)
 			if !exists {
-				err := u.uploadFile(fullPath, destDir, randomisePart)
+				err := u.uploadFile(fullPath, destDir)
 				if err != nil {
 					Error.Println("upload failed:", entry.Name(), err)
 				}
@@ -542,12 +592,14 @@ func main() {
 		pacer.MaxSleep(5*time.Second), pacer.DecayConstant(2), pacer.AttackConstant(0)))
 
 	uploader := &Uploader{
-		http:       httpClient,
-		numWorkers: config.Workers,
-		channelID:  config.ChannelID,
-		partSize:   int64(config.PartSize),
-		pacer:      pacer,
-		ctx:        ctx,
+		http:          httpClient,
+		numWorkers:    config.Workers,
+		encryptFiles:  config.EncryptFiles,
+		randomisePart: config.RandomisePart,
+		channelID:     config.ChannelID,
+		partSize:      int64(config.PartSize),
+		pacer:         pacer,
+		ctx:           ctx,
 	}
 
 	err = uploader.createRemoteDir(*destDir)
@@ -558,12 +610,12 @@ func main() {
 
 	if fileInfo, err := os.Stat(*sourcePath); err == nil {
 		if fileInfo.IsDir() {
-			err := uploader.uploadFilesInDirectory(*sourcePath, *destDir, config.RandomisePart)
+			err := uploader.uploadFilesInDirectory(*sourcePath, *destDir)
 			if err != nil {
 				Error.Println("upload failed:", err)
 			}
 		} else {
-			if err := uploader.uploadFile(*sourcePath, *destDir, config.RandomisePart); err != nil {
+			if err := uploader.uploadFile(*sourcePath, *destDir); err != nil {
 				Error.Println("upload failed:", err)
 			}
 		}
