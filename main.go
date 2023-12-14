@@ -187,7 +187,7 @@ func (u *Uploader) checkFileExists(fileName string, path string) bool {
 		resp, err = u.http.CallJSON(u.ctx, &opts, nil, &info)
 		return shouldRetry(u.ctx, resp, err)
 	})
-	if err == nil && len(info.Files) > 0 {
+	if resp.StatusCode != 404 && err == nil && len(info.Files) > 0 {
 		return true
 	}
 
@@ -372,7 +372,7 @@ func (u *Uploader) uploadFile(filePath string, destDir string) error {
 
 	var parts []FilePart
 	for uploadPart := range uploadedParts {
-		parts = append(parts, FilePart{ID: int64(uploadPart.PartId), Salt: uploadPart.Salt})
+		parts = append(parts, FilePart{ID: int64(uploadPart.PartId), PartNo: uploadPart.PartNo, Salt: uploadPart.Salt})
 	}
 
 	if len(parts) != int(totalParts) {
