@@ -292,6 +292,8 @@ func (u *Uploader) uploadFile(filePath string, destDir string) error {
 		bar.Close()
 	}()
 
+	var partName string
+
 	for i := int64(0); i < totalParts; i++ {
 		start := i * u.partSize
 		end := start + u.partSize
@@ -334,13 +336,11 @@ func (u *Uploader) uploadFile(filePath string, destDir string) error {
 			contentLength := end - start
 			reader := io.LimitReader(pr, contentLength)
 
-			name := fileName
-
 			if u.randomisePart {
 				u1, _ := uuid.NewV4()
-				name = hex.EncodeToString(u1.Bytes())
+				partName = hex.EncodeToString(u1.Bytes())
 			} else if totalParts > 1 {
-				name = fmt.Sprintf("%s.part.%03d", fileName, partNumber+1)
+				partName = fmt.Sprintf("%s.part.%03d", fileName, partNumber+1)
 			}
 
 			opts := rest.Opts{
@@ -349,9 +349,9 @@ func (u *Uploader) uploadFile(filePath string, destDir string) error {
 				Body:          reader,
 				ContentLength: &contentLength,
 				Parameters: url.Values{
-					"fileName": []string{name},
-					"partNo":   []string{strconv.FormatInt(partNumber+1, 10)},
-					// "totalparts": []string{strconv.FormatInt(int64(totalParts), 10)},
+					"partName":  []string{partName},
+					"fileName":  []string{fileName},
+					"partNo":    []string{strconv.FormatInt(partNumber+1, 10)},
 					"channelId": []string{strconv.FormatInt(int64(channelID), 10)},
 					"encrypted": []string{strconv.FormatBool(encryptFile)},
 				},
