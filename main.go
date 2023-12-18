@@ -20,13 +20,14 @@ import (
 
 	"flag"
 
-	"github.com/cheggaaa/pb/v3"
 	"github.com/gofrs/uuid"
 	"github.com/kelseyhightower/envconfig"
 	"github.com/rclone/rclone/fs"
 	"github.com/rclone/rclone/fs/fserrors"
 	"github.com/rclone/rclone/lib/pacer"
 	"github.com/rclone/rclone/lib/rest"
+	"github.com/vbauerster/mpb/v8"
+	"github.com/vbauerster/mpb/v8/decor"
 
 	"github.com/joho/godotenv"
 )
@@ -292,22 +293,42 @@ func (u *Uploader) uploadFile(filePath string, destDir string) error {
 		fileName = fileName[:half-2] + "..." + fileName[len(fileName)-half+1:]
 	}
 
-	tmpl := `{{string . "fileName"}}  {{percent . }} {{bar . }} ({{counters . }}, {{speed . }}) [{{etime . "%s"}}:{{rtime . "%s"}}]`
-	progressBar := pb.ProgressBarTemplate(tmpl).Start64(fileSize).
-		SetRefreshRate(time.Second).
-		SetWriter(os.Stderr).
-		Set(pb.Bytes, true).
-		Set(pb.SIBytesPrefix, true).
-		Set("fileName", fileName)
+	// tmpl := `{{string . "fileName"}}  {{percent . }} {{bar . }} ({{counters . }}, {{speed . }}) [{{etime . "%s"}}:{{rtime . "%s"}}]`
+	// progressBar := pb.ProgressBarTemplate(tmpl).Start64(fileSize).
+	// 	SetRefreshRate(time.Second).
+	// 	SetWriter(os.Stderr).
+	// 	Set(pb.Bytes, true).
+	// 	Set(pb.SIBytesPrefix, true).
+	// 	Set("fileName", fileName)
 
-	if err := progressBar.Err(); err != nil {
-		return err
-	}
+	// if err := progressBar.Err(); err != nil {
+	// 	return err
+	// }
+
+	p := mpb.New(mpb.WithWidth(64))
+
+	bar := p.New(fileSize,
+		mpb.BarStyle().Rbound("|"),
+		mpb.PrependDecorators(
+			decor.Name(fileName, decor.WC{C: decor.DindentRight | decor.DextraSpace}),
+			decor.Name(" ("),
+			decor.Percentage(decor.WCSyncSpace, decor.WC{C: decor.DindentRight}),
+			decor.Name(")  "),
+			decor.Counters(decor.SizeB1000(0), "% .2f/% .2f"),
+		),
+		mpb.AppendDecorators(
+			// decor.EwmaETA(decor.ET_STYLE_GO, 60),
+			decor.AverageETA(decor.ET_STYLE_GO),
+			decor.Name(" ] "),
+			// decor.EwmaSpeed(decor.SizeB1000(0), "% .2f", 60),
+			decor.AverageSpeed(decor.SizeB1000(0), "% .2f"),
+		),
+	)
 
 	go func() {
 		wg.Wait()
 		close(uploadedParts)
-		progressBar.Finish()
+		// progressBar.Finish()
 		// bar.Finish()
 		// bar.Close()
 	}()
@@ -339,7 +360,8 @@ func (u *Uploader) uploadFile(filePath string, destDir string) error {
 			if existing, ok := existingParts[int(partNumber)+1]; ok {
 				uploadedParts <- existing
 				// bar.Add64(existing.Size)
-				progressBar.Add64(existing.Size)
+				// progressBar.Add64(existing.Size)
+				bar.IncrInt64(existing.Size)
 				return
 			}
 
@@ -353,7 +375,9 @@ func (u *Uploader) uploadFile(filePath string, destDir string) error {
 			// pr := &ProgressReader{file, func(r int64) {
 			// 	bar.Add64(r)
 			// }}
-			barReader := progressBar.NewProxyReader(file)
+			// barReader := progressBar.NewProxyReader(file)
+			barReader := bar.ProxyReader(file)
+			defer barReader.Close()
 
 			contentLength := end - start
 			reader := io.LimitReader(barReader, contentLength)
@@ -391,6 +415,7 @@ func (u *Uploader) uploadFile(filePath string, destDir string) error {
 			}
 		}(i, start, end)
 	}
+	p.Wait()
 
 	var parts []FilePart
 	for uploadPart := range uploadedParts {
