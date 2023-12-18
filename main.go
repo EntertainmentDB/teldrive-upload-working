@@ -20,6 +20,7 @@ import (
 
 	"flag"
 
+	"github.com/cheggaaa/pb/v3"
 	"github.com/gofrs/uuid"
 	"github.com/kelseyhightower/envconfig"
 	"github.com/rclone/rclone/fs"
@@ -28,7 +29,6 @@ import (
 	"github.com/rclone/rclone/lib/rest"
 
 	"github.com/joho/godotenv"
-	"github.com/schollz/progressbar/v3"
 )
 
 var Info = log.New(os.Stdout, "\u001b[34mINFO: \u001B[0m", log.LstdFlags|log.Lshortfile)
@@ -267,29 +267,49 @@ func (u *Uploader) uploadFile(filePath string, destDir string) error {
 		encryptFile = uploadFile.Parts[0].Encrypted
 	}
 
-	bar := progressbar.NewOptions64(fileSize,
-		progressbar.OptionShowCount(),
-		progressbar.OptionSetWriter(os.Stderr),
-		progressbar.OptionEnableColorCodes(true),
-		progressbar.OptionShowBytes(true),
-		progressbar.OptionSetWidth(10),
-		progressbar.OptionThrottle(65*time.Millisecond),
-		progressbar.OptionSetDescription(fileName),
-		progressbar.OptionSetTheme(progressbar.Theme{
-			Saucer:        "[green]=[reset]",
-			SaucerHead:    "[green]>[reset]",
-			SaucerPadding: " ",
-			BarStart:      "[",
-			BarEnd:        "]",
-		}),
-		progressbar.OptionFullWidth(),
-		progressbar.OptionSetRenderBlankState(true))
+	// bar := progressbar.NewOptions64(fileSize,
+	// 	progressbar.OptionShowCount(),
+	// 	progressbar.OptionSetWriter(os.Stderr),
+	// 	progressbar.OptionEnableColorCodes(true),
+	// 	progressbar.OptionShowBytes(true),
+	// 	progressbar.OptionSetWidth(10),
+	// 	progressbar.OptionThrottle(65*time.Millisecond),
+	// 	progressbar.OptionSetDescription(fileName),
+	// 	progressbar.OptionSetTheme(progressbar.Theme{
+	// 		Saucer:        "[green]=[reset]",
+	// 		SaucerHead:    "[green]>[reset]",
+	// 		SaucerPadding: " ",
+	// 		BarStart:      "[",
+	// 		BarEnd:        "]",
+	// 	}),
+	// 	progressbar.OptionFullWidth(),
+	// 	progressbar.OptionSetRenderBlankState(true))
+
+	const maxFileNameLength = 55
+
+	if len(fileName) > maxFileNameLength {
+		half := maxFileNameLength / 2
+		fileName = fileName[:half-2] + "..." + fileName[len(fileName)-half+1:]
+	}
+
+	tmpl := `{{string . "fileName"}}  {{percent . }} {{bar . }} ({{counters . }}, {{speed . }}) [{{etime . "%s"}}:{{rtime . "%s"}}]`
+	progressBar := pb.ProgressBarTemplate(tmpl).Start64(fileSize).
+		SetRefreshRate(time.Second).
+		SetWriter(os.Stderr).
+		Set(pb.Bytes, true).
+		Set(pb.SIBytesPrefix, true).
+		Set("fileName", fileName)
+
+	if err := progressBar.Err(); err != nil {
+		return err
+	}
 
 	go func() {
 		wg.Wait()
 		close(uploadedParts)
-		bar.Finish()
-		bar.Close()
+		progressBar.Finish()
+		// bar.Finish()
+		// bar.Close()
 	}()
 
 	var partName string
@@ -318,7 +338,8 @@ func (u *Uploader) uploadFile(filePath string, destDir string) error {
 			defer file.Close()
 			if existing, ok := existingParts[int(partNumber)+1]; ok {
 				uploadedParts <- existing
-				bar.Add64(existing.Size)
+				// bar.Add64(existing.Size)
+				progressBar.Add64(existing.Size)
 				return
 			}
 
@@ -329,12 +350,13 @@ func (u *Uploader) uploadFile(filePath string, destDir string) error {
 				return
 			}
 
-			pr := &ProgressReader{file, func(r int64) {
-				bar.Add64(r)
-			}}
+			// pr := &ProgressReader{file, func(r int64) {
+			// 	bar.Add64(r)
+			// }}
+			barReader := progressBar.NewProxyReader(file)
 
 			contentLength := end - start
-			reader := io.LimitReader(pr, contentLength)
+			reader := io.LimitReader(barReader, contentLength)
 
 			if u.randomisePart {
 				u1, _ := uuid.NewV4()
@@ -425,7 +447,6 @@ func (u *Uploader) uploadFile(filePath string, destDir string) error {
 
 	return nil
 }
-
 func (u *Uploader) createRemoteDir(path string) error {
 	opts := rest.Opts{
 		Method: "POST",
