@@ -195,7 +195,7 @@ func (u *Uploader) checkFileExists(fileName string, path string) bool {
 	return false
 }
 
-func (u *Uploader) uploadFile(filePath string, destDir string) error {
+func (u *Uploader) uploadFile(filePath string, destDir string, p *mpb.Progress) error {
 	file, err := os.Open(filePath)
 	if err != nil {
 		return err
@@ -216,7 +216,9 @@ func (u *Uploader) uploadFile(filePath string, destDir string) error {
 	fileName := filepath.Base(filePath)
 
 	if u.checkFileExists(fileName, destDir) {
-		Info.Println("file exists:", fileName)
+		// Info.Println("file exists:", fileName)
+		// bar.IncrInt64(fileSize)
+		// bar.Wait()
 		return nil
 	}
 
@@ -286,12 +288,15 @@ func (u *Uploader) uploadFile(filePath string, destDir string) error {
 	// 	progressbar.OptionFullWidth(),
 	// 	progressbar.OptionSetRenderBlankState(true))
 
-	const maxFileNameLength = 55
+	shortedName := func(name string) string {
+		const maxFileNameLength = 75
 
-	if len(fileName) > maxFileNameLength {
-		half := maxFileNameLength / 2
-		fileName = fileName[:half-2] + "..." + fileName[len(fileName)-half+1:]
-	}
+		if len(fileName) > maxFileNameLength {
+			half := maxFileNameLength / 2
+			return fileName[:half-2] + "..." + fileName[len(fileName)-half+1:]
+		}
+		return fileName
+	}(fileName)
 
 	// tmpl := `{{string . "fileName"}}  {{percent . }} {{bar . }} ({{counters . }}, {{speed . }}) [{{etime . "%s"}}:{{rtime . "%s"}}]`
 	// progressBar := pb.ProgressBarTemplate(tmpl).Start64(fileSize).
@@ -305,32 +310,43 @@ func (u *Uploader) uploadFile(filePath string, destDir string) error {
 	// 	return err
 	// }
 
-	p := mpb.New(mpb.WithWidth(64))
-
-	bar := p.New(fileSize,
-		mpb.BarStyle().Rbound("|"),
+	var bar *mpb.Bar
+	barOptions := []mpb.BarOption{
 		mpb.PrependDecorators(
-			decor.Name(fileName, decor.WC{C: decor.DindentRight | decor.DextraSpace}),
+			decor.Name(shortedName, decor.WC{C: decor.DSyncWidthR | decor.DextraSpace}),
 			decor.Name(" ("),
-			decor.Percentage(decor.WCSyncSpace, decor.WC{C: decor.DindentRight}),
+			decor.Percentage(decor.WCSyncSpace, decor.WC{C: decor.DSyncWidthR}),
 			decor.Name(")  "),
-			decor.Counters(decor.SizeB1000(0), "% .2f/% .2f"),
-		),
-		mpb.AppendDecorators(
+			decor.Counters(decor.SizeB1000(0), "% .2f/% .2f", decor.WC{C: decor.DSyncWidthR}),
+		), mpb.AppendDecorators(
 			// decor.EwmaETA(decor.ET_STYLE_GO, 60),
 			decor.AverageETA(decor.ET_STYLE_GO),
-			decor.Name(" ] "),
-			// decor.EwmaSpeed(decor.SizeB1000(0), "% .2f", 60),
-			decor.AverageSpeed(decor.SizeB1000(0), "% .2f"),
+			decor.Name(" | "),
+			// decor.OnComplete(decor.EwmaSpeed(decor.SizeB1000(0), "% .2f", 60), "completed"),
+			decor.OnComplete(decor.AverageSpeed(decor.SizeB1000(0), "% .2f", decor.WC{C: decor.DSyncWidthR}), "completed"),
 		),
-	)
+	}
+
+	isSingleBar := p == nil
+
+	if p != nil {
+		bar = p.AddBar(fileSize,
+			barOptions...,
+		)
+	} else {
+		p = mpb.New(mpb.WithWidth(64))
+		bar = p.New(fileSize,
+			mpb.BarStyle().Rbound("|"),
+			barOptions...,
+		)
+	}
+
+	defer bar.Abort(true)
+	defer bar.Wait()
 
 	go func() {
 		wg.Wait()
 		close(uploadedParts)
-		// progressBar.Finish()
-		// bar.Finish()
-		// bar.Close()
 	}()
 
 	var partName string
@@ -359,8 +375,6 @@ func (u *Uploader) uploadFile(filePath string, destDir string) error {
 			defer file.Close()
 			if existing, ok := existingParts[int(partNumber)+1]; ok {
 				uploadedParts <- existing
-				// bar.Add64(existing.Size)
-				// progressBar.Add64(existing.Size)
 				bar.IncrInt64(existing.Size)
 				return
 			}
@@ -372,15 +386,14 @@ func (u *Uploader) uploadFile(filePath string, destDir string) error {
 				return
 			}
 
-			// pr := &ProgressReader{file, func(r int64) {
-			// 	bar.Add64(r)
-			// }}
-			// barReader := progressBar.NewProxyReader(file)
-			barReader := bar.ProxyReader(file)
-			defer barReader.Close()
+			pr := &ProgressReader{file, func(r int64) {
+				bar.IncrInt64(r)
+			}}
+			// pr := bar.ProxyReader(file)
+			// defer pr.Close()
 
 			contentLength := end - start
-			reader := io.LimitReader(barReader, contentLength)
+			reader := io.LimitReader(pr, contentLength)
 
 			if u.randomisePart {
 				u1, _ := uuid.NewV4()
@@ -415,7 +428,11 @@ func (u *Uploader) uploadFile(filePath string, destDir string) error {
 			}
 		}(i, start, end)
 	}
-	p.Wait()
+
+	bar.Wait()
+	if isSingleBar {
+		p.Wait()
+	}
 
 	var parts []FilePart
 	for uploadPart := range uploadedParts {
@@ -597,7 +614,7 @@ func (u *Uploader) uploadFilesInDirectory(sourcePath string, destDir string) err
 
 			exists := u.checkFileExistsInDirectory(entry.Name(), files)
 			if !exists {
-				err := u.uploadFile(fullPath, destDir)
+				err := u.uploadFile(fullPath, destDir, nil)
 				if err != nil {
 					Error.Println("upload failed:", entry.Name(), err)
 				}
@@ -656,18 +673,64 @@ func main() {
 
 	if fileInfo, err := os.Stat(*sourcePath); err == nil {
 		if fileInfo.IsDir() {
-			err := uploader.uploadFilesInDirectory(*sourcePath, *destDir)
+			files, err := os.ReadDir(*sourcePath)
 			if err != nil {
-				Error.Println("upload failed:", err)
+				log.Fatal(err)
 			}
+
+			concurrentFiles := make(chan struct{}, 3)
+			var wg sync.WaitGroup
+			p := mpb.New(mpb.WithWaitGroup(&wg))
+			// wg.Add(len(files))
+
+			for _, file := range files {
+				concurrentFiles <- struct{}{}
+				wg.Add(1)
+
+				go func(file os.DirEntry) {
+					defer wg.Done()
+					defer func() {
+						<-concurrentFiles
+					}()
+
+					fullPath := filepath.Join(*sourcePath, file.Name())
+					// fmt.Println("File Name:", file.Name())
+					err := uploader.uploadFile(fullPath, *destDir, p)
+					if err != nil {
+						Error.Println("upload failed:", err)
+					}
+				}(file)
+			}
+
+			p.Wait()
+
+			// err := uploader.uploadFilesInDirectory(*sourcePath, *destDir)
+			// if err != nil {
+			// 	Error.Println("upload failed:", err)
+			// }
 		} else {
-			if err := uploader.uploadFile(*sourcePath, *destDir); err != nil {
+			if err := uploader.uploadFile(*sourcePath, *destDir, nil); err != nil {
 				Error.Println("upload failed:", err)
 			}
 		}
 	} else {
 		Error.Fatalln(err)
 	}
+
+	// if fileInfo, err := os.Stat(*sourcePath); err == nil {
+	// 	if fileInfo.IsDir() {
+	// 		err := uploader.uploadFilesInDirectory(*sourcePath, *destDir)
+	// 		if err != nil {
+	// 			Error.Println("upload failed:", err)
+	// 		}
+	// 	} else {
+	// 		if err := uploader.uploadFile(*sourcePath, *destDir, nil); err != nil {
+	// 			Error.Println("upload failed:", err)
+	// 		}
+	// 	}
+	// } else {
+	// 	Error.Fatalln(err)
+	// }
 
 	Info.Println("Uploads complete!")
 }
