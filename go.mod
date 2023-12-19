@@ -10,6 +10,7 @@ require (
 	github.com/cheggaaa/pb/v3 v3.1.4 // indirect
 	github.com/fatih/color v1.15.0 // indirect
 	github.com/gofrs/uuid v4.4.0+incompatible // indirect
+	github.com/jedib0t/go-pretty/v6 v6.4.9 // indirect
 	github.com/mattn/go-colorable v0.1.13 // indirect
 	github.com/mattn/go-isatty v0.0.19 // indirect
 	github.com/vbauerster/mpb/v8 v8.7.1 // indirect

@@ -45,6 +45,7 @@ type Config struct {
 	SessionToken  string        `envconfig:"SESSION_TOKEN" required:"true"`
 	PartSize      fs.SizeSuffix `envconfig:"PART_SIZE"`
 	Workers       int           `envconfig:"WORKERS" default:"4"`
+	Transfers     int           `envconfig:"TRANSFERS" default:"4"`
 	RandomisePart bool          `envconfig:"RANDOMISE_PART" default:"true"`
 	EncryptFiles  bool          `envconfig:"ENCRYPT_FILES" default:"true"`
 	ChannelID     int64         `envconfig:"CHANNEL_ID"`
@@ -114,12 +115,15 @@ type ReadMetadataResponse struct {
 type Uploader struct {
 	http          *rest.Client
 	numWorkers    int
+	numTransfers  int
 	partSize      int64
 	encryptFiles  bool
 	randomisePart bool
 	channelID     int64
 	pacer         *fs.Pacer
 	ctx           context.Context
+	progress      *mpb.Progress
+	wg            *sync.WaitGroup
 }
 
 var retryErrorCodes = []int{
@@ -216,7 +220,7 @@ func (u *Uploader) uploadFile(filePath string, destDir string, p *mpb.Progress) 
 	fileName := filepath.Base(filePath)
 
 	if u.checkFileExists(fileName, destDir) {
-		// Info.Println("file exists:", fileName)
+		Info.Println("file exists:", fileName)
 		// bar.IncrInt64(fileSize)
 		// bar.Wait()
 		return nil
@@ -297,18 +301,6 @@ func (u *Uploader) uploadFile(filePath string, destDir string, p *mpb.Progress) 
 		}
 		return fileName
 	}(fileName)
-
-	// tmpl := `{{string . "fileName"}}  {{percent . }} {{bar . }} ({{counters . }}, {{speed . }}) [{{etime . "%s"}}:{{rtime . "%s"}}]`
-	// progressBar := pb.ProgressBarTemplate(tmpl).Start64(fileSize).
-	// 	SetRefreshRate(time.Second).
-	// 	SetWriter(os.Stderr).
-	// 	Set(pb.Bytes, true).
-	// 	Set(pb.SIBytesPrefix, true).
-	// 	Set("fileName", fileName)
-
-	// if err := progressBar.Err(); err != nil {
-	// 	return err
-	// }
 
 	var bar *mpb.Bar
 	barOptions := []mpb.BarOption{
@@ -585,16 +577,17 @@ func (u *Uploader) checkFileExistsInDirectory(name string, files []FileInfo) boo
 func (u *Uploader) uploadFilesInDirectory(sourcePath string, destDir string) error {
 	entries, err := os.ReadDir(sourcePath)
 	if err != nil {
-		return err
+		log.Fatal(err)
 	}
 
 	destDir = strings.ReplaceAll(destDir, "\\", "/")
 
-	files, err := u.list(destDir)
-
+	filesInRemote, err := u.list(destDir)
 	if err != nil {
 		return err
 	}
+
+	concurrentFiles := make(chan struct{}, u.numTransfers)
 
 	for _, entry := range entries {
 		fullPath := filepath.Join(sourcePath, entry.Name())
@@ -611,18 +604,28 @@ func (u *Uploader) uploadFilesInDirectory(sourcePath string, destDir string) err
 				Error.Println(err)
 			}
 		} else {
-
-			exists := u.checkFileExistsInDirectory(entry.Name(), files)
+			exists := u.checkFileExistsInDirectory(entry.Name(), filesInRemote)
 			if !exists {
-				err := u.uploadFile(fullPath, destDir, nil)
-				if err != nil {
-					Error.Println("upload failed:", entry.Name(), err)
-				}
+				concurrentFiles <- struct{}{}
+				u.wg.Add(1)
+
+				go func(file os.DirEntry) {
+					defer u.wg.Done()
+					defer func() {
+						<-concurrentFiles
+					}()
+
+					err := u.uploadFile(fullPath, destDir, u.progress)
+					if err != nil {
+						Error.Println("upload failed:", err)
+					}
+				}(entry)
 			} else {
 				Info.Println("file exists:", entry.Name())
 			}
 		}
 	}
+
 	return nil
 }
 
@@ -654,15 +657,21 @@ func main() {
 	pacer := fs.NewPacer(ctx, pacer.NewDefault(pacer.MinSleep(400*time.Millisecond),
 		pacer.MaxSleep(5*time.Second), pacer.DecayConstant(2), pacer.AttackConstant(0)))
 
+	var wg sync.WaitGroup
+	progress := mpb.New(mpb.WithWaitGroup(&wg))
+
 	uploader := &Uploader{
 		http:          httpClient,
 		numWorkers:    config.Workers,
+		numTransfers:  config.Transfers,
 		encryptFiles:  config.EncryptFiles,
 		randomisePart: config.RandomisePart,
 		channelID:     config.ChannelID,
 		partSize:      int64(config.PartSize),
 		pacer:         pacer,
 		ctx:           ctx,
+		progress:      progress,
+		wg:            &wg,
 	}
 
 	err = uploader.createRemoteDir(*destDir)
@@ -673,41 +682,11 @@ func main() {
 
 	if fileInfo, err := os.Stat(*sourcePath); err == nil {
 		if fileInfo.IsDir() {
-			files, err := os.ReadDir(*sourcePath)
+			err := uploader.uploadFilesInDirectory(*sourcePath, *destDir)
 			if err != nil {
-				log.Fatal(err)
+				Error.Println("upload failed:", err)
 			}
-
-			concurrentFiles := make(chan struct{}, 3)
-			var wg sync.WaitGroup
-			p := mpb.New(mpb.WithWaitGroup(&wg))
-			// wg.Add(len(files))
-
-			for _, file := range files {
-				concurrentFiles <- struct{}{}
-				wg.Add(1)
-
-				go func(file os.DirEntry) {
-					defer wg.Done()
-					defer func() {
-						<-concurrentFiles
-					}()
-
-					fullPath := filepath.Join(*sourcePath, file.Name())
-					// fmt.Println("File Name:", file.Name())
-					err := uploader.uploadFile(fullPath, *destDir, p)
-					if err != nil {
-						Error.Println("upload failed:", err)
-					}
-				}(file)
-			}
-
-			p.Wait()
-
-			// err := uploader.uploadFilesInDirectory(*sourcePath, *destDir)
-			// if err != nil {
-			// 	Error.Println("upload failed:", err)
-			// }
+			uploader.progress.Wait()
 		} else {
 			if err := uploader.uploadFile(*sourcePath, *destDir, nil); err != nil {
 				Error.Println("upload failed:", err)
@@ -716,21 +695,6 @@ func main() {
 	} else {
 		Error.Fatalln(err)
 	}
-
-	// if fileInfo, err := os.Stat(*sourcePath); err == nil {
-	// 	if fileInfo.IsDir() {
-	// 		err := uploader.uploadFilesInDirectory(*sourcePath, *destDir)
-	// 		if err != nil {
-	// 			Error.Println("upload failed:", err)
-	// 		}
-	// 	} else {
-	// 		if err := uploader.uploadFile(*sourcePath, *destDir, nil); err != nil {
-	// 			Error.Println("upload failed:", err)
-	// 		}
-	// 	}
-	// } else {
-	// 	Error.Fatalln(err)
-	// }
 
 	Info.Println("Uploads complete!")
 }
