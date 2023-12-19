@@ -199,7 +199,7 @@ func (u *Uploader) checkFileExists(fileName string, path string) bool {
 	return false
 }
 
-func (u *Uploader) uploadFile(filePath string, destDir string, p *mpb.Progress) error {
+func (u *Uploader) uploadFile(filePath string, destDir string) error {
 	file, err := os.Open(filePath)
 	if err != nil {
 		return err
@@ -221,8 +221,6 @@ func (u *Uploader) uploadFile(filePath string, destDir string, p *mpb.Progress) 
 
 	if u.checkFileExists(fileName, destDir) {
 		Info.Println("file exists:", fileName)
-		// bar.IncrInt64(fileSize)
-		// bar.Wait()
 		return nil
 	}
 
@@ -292,7 +290,7 @@ func (u *Uploader) uploadFile(filePath string, destDir string, p *mpb.Progress) 
 	// 	progressbar.OptionFullWidth(),
 	// 	progressbar.OptionSetRenderBlankState(true))
 
-	shortedName := func(name string) string {
+	shortenedName := func(name string) string {
 		const maxFileNameLength = 75
 
 		if len(fileName) > maxFileNameLength {
@@ -305,7 +303,7 @@ func (u *Uploader) uploadFile(filePath string, destDir string, p *mpb.Progress) 
 	var bar *mpb.Bar
 	barOptions := []mpb.BarOption{
 		mpb.PrependDecorators(
-			decor.Name(shortedName, decor.WC{C: decor.DSyncWidthR | decor.DextraSpace}),
+			decor.Name(shortenedName, decor.WC{C: decor.DSyncWidthR | decor.DextraSpace}),
 			decor.Name(" ("),
 			decor.Percentage(decor.WCSyncSpace, decor.WC{C: decor.DSyncWidthR}),
 			decor.Name(")  "),
@@ -314,27 +312,19 @@ func (u *Uploader) uploadFile(filePath string, destDir string, p *mpb.Progress) 
 			// decor.EwmaETA(decor.ET_STYLE_GO, 60),
 			decor.AverageETA(decor.ET_STYLE_GO),
 			decor.Name(" | "),
-			// decor.OnComplete(decor.EwmaSpeed(decor.SizeB1000(0), "% .2f", 60), "completed"),
+			// decor.OnComplete(decor.EwmaSpeed(decor.SizeB1000(0), "% .2f", 60, decor.WC{C: decor.DSyncWidthR}), "completed"),
 			decor.OnComplete(decor.AverageSpeed(decor.SizeB1000(0), "% .2f", decor.WC{C: decor.DSyncWidthR}), "completed"),
 		),
 	}
 
-	isSingleBar := p == nil
-
-	if p != nil {
-		bar = p.AddBar(fileSize,
-			barOptions...,
-		)
-	} else {
-		p = mpb.New(mpb.WithWidth(64))
-		bar = p.New(fileSize,
-			mpb.BarStyle().Rbound("|"),
-			barOptions...,
-		)
-	}
-
-	defer bar.Abort(true)
-	defer bar.Wait()
+	bar = u.progress.AddBar(fileSize,
+		barOptions...,
+	)
+	// u.progress = mpb.New(mpb.WithWidth(64))
+	// bar = u.progress.New(fileSize,
+	// 	mpb.BarStyle().Rbound("|"),
+	// 	barOptions...,
+	// )
 
 	go func() {
 		wg.Wait()
@@ -422,9 +412,6 @@ func (u *Uploader) uploadFile(filePath string, destDir string, p *mpb.Progress) 
 	}
 
 	bar.Wait()
-	if isSingleBar {
-		p.Wait()
-	}
 
 	var parts []FilePart
 	for uploadPart := range uploadedParts {
@@ -615,7 +602,7 @@ func (u *Uploader) uploadFilesInDirectory(sourcePath string, destDir string) err
 						<-concurrentFiles
 					}()
 
-					err := u.uploadFile(fullPath, destDir, u.progress)
+					err := u.uploadFile(fullPath, destDir)
 					if err != nil {
 						Error.Println("upload failed:", err)
 					}
@@ -688,7 +675,7 @@ func main() {
 			}
 			uploader.progress.Wait()
 		} else {
-			if err := uploader.uploadFile(*sourcePath, *destDir, nil); err != nil {
+			if err := uploader.uploadFile(*sourcePath, *destDir); err != nil {
 				Error.Println("upload failed:", err)
 			}
 		}
