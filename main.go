@@ -365,8 +365,6 @@ func (u *Uploader) uploadFile(filePath string, destDir string) error {
 
 			if err != nil {
 				Error.Println("Error:", err)
-				bar.Abort(true)
-				bar.Wait()
 				return
 			}
 
@@ -405,8 +403,6 @@ func (u *Uploader) uploadFile(filePath string, destDir string) error {
 
 			if err != nil {
 				Error.Println("Error:", err)
-				bar.Abort(true)
-				bar.Wait()
 				return
 			}
 			if resp.StatusCode == 201 {
@@ -415,16 +411,19 @@ func (u *Uploader) uploadFile(filePath string, destDir string) error {
 		}(i, start, end)
 	}
 
-	bar.Wait()
-
 	var parts []FilePart
 	for uploadPart := range uploadedParts {
-		parts = append(parts, FilePart{ID: int64(uploadPart.PartId), PartNo: uploadPart.PartNo, Salt: uploadPart.Salt})
+		if uploadPart.PartId != 0 {
+			parts = append(parts, FilePart{ID: int64(uploadPart.PartId), PartNo: uploadPart.PartNo, Salt: uploadPart.Salt})
+		}
 	}
 
 	if len(parts) != int(totalParts) {
+		bar.Abort(true)
+		bar.Wait()
 		return fmt.Errorf("upload failed: %s", fileName)
 	}
+	bar.Wait()
 
 	sort.Slice(parts, func(i, j int) bool {
 		return parts[i].PartNo < parts[j].PartNo
