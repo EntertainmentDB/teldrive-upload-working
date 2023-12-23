@@ -365,6 +365,8 @@ func (u *Uploader) uploadFile(filePath string, destDir string) error {
 
 			if err != nil {
 				Error.Println("Error:", err)
+				bar.Abort(true)
+				bar.Wait()
 				return
 			}
 
@@ -403,6 +405,8 @@ func (u *Uploader) uploadFile(filePath string, destDir string) error {
 
 			if err != nil {
 				Error.Println("Error:", err)
+				bar.Abort(true)
+				bar.Wait()
 				return
 			}
 			if resp.StatusCode == 201 {
