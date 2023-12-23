@@ -617,6 +617,8 @@ func (u *Uploader) uploadFilesInDirectory(sourcePath string, destDir string) err
 func main() {
 	sourcePath := flag.String("path", "", "File or directory path to upload")
 	destDir := flag.String("dest", "", "Remote directory for uploaded files")
+	workers := flag.String("workers", "", "Number of current workers to use when uploading multi-parts")
+	transfers := flag.String("transfers", "", "Number of current files to upload at once")
 	flag.Parse()
 
 	if *sourcePath == "" || *destDir == "" {
@@ -644,11 +646,27 @@ func main() {
 
 	var wg sync.WaitGroup
 	progress := mpb.New(mpb.WithWaitGroup(&wg))
-	concurrentFiles := make(chan struct{}, config.Transfers)
+
+	numTransfers := config.Transfers
+	if *transfers != "" {
+		numTransfers, err = strconv.Atoi(*transfers)
+	}
+	if err != nil {
+		Error.Fatalln("transfers flag must be a number", err)
+	}
+	concurrentFiles := make(chan struct{}, numTransfers)
+
+	numWorkers := config.Workers
+	if *workers != "" {
+		numWorkers, err = strconv.Atoi(*workers)
+	}
+	if err != nil {
+		Error.Fatalln("workers flag must be a number", err)
+	}
 
 	uploader := &Uploader{
 		http:            httpClient,
-		numWorkers:      config.Workers,
+		numWorkers:      numWorkers,
 		concurrentFiles: concurrentFiles,
 		encryptFiles:    config.EncryptFiles,
 		randomisePart:   config.RandomisePart,
