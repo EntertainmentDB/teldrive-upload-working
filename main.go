@@ -331,7 +331,7 @@ func (u *Uploader) uploadFile(filePath string, destDir string) error {
 		close(uploadedParts)
 	}()
 
-	var partName string
+	partName := fileName
 
 	for i := int64(0); i < totalParts; i++ {
 		start := i * u.partSize
