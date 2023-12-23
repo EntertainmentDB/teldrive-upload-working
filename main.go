@@ -113,17 +113,17 @@ type ReadMetadataResponse struct {
 }
 
 type Uploader struct {
-	http          *rest.Client
-	numWorkers    int
-	numTransfers  int
-	partSize      int64
-	encryptFiles  bool
-	randomisePart bool
-	channelID     int64
-	pacer         *fs.Pacer
-	ctx           context.Context
-	progress      *mpb.Progress
-	wg            *sync.WaitGroup
+	http            *rest.Client
+	numWorkers      int
+	concurrentFiles chan struct{}
+	partSize        int64
+	encryptFiles    bool
+	randomisePart   bool
+	channelID       int64
+	pacer           *fs.Pacer
+	ctx             context.Context
+	progress        *mpb.Progress
+	wg              *sync.WaitGroup
 }
 
 var retryErrorCodes = []int{
@@ -574,8 +574,6 @@ func (u *Uploader) uploadFilesInDirectory(sourcePath string, destDir string) err
 		return err
 	}
 
-	concurrentFiles := make(chan struct{}, u.numTransfers)
-
 	for _, entry := range entries {
 		fullPath := filepath.Join(sourcePath, entry.Name())
 
@@ -593,13 +591,13 @@ func (u *Uploader) uploadFilesInDirectory(sourcePath string, destDir string) err
 		} else {
 			exists := u.checkFileExistsInDirectory(entry.Name(), filesInRemote)
 			if !exists {
-				concurrentFiles <- struct{}{}
+				u.concurrentFiles <- struct{}{}
 				u.wg.Add(1)
 
 				go func(file os.DirEntry) {
 					defer u.wg.Done()
 					defer func() {
-						<-concurrentFiles
+						<-u.concurrentFiles
 					}()
 
 					err := u.uploadFile(fullPath, destDir)
@@ -646,19 +644,20 @@ func main() {
 
 	var wg sync.WaitGroup
 	progress := mpb.New(mpb.WithWaitGroup(&wg))
+	concurrentFiles := make(chan struct{}, config.Transfers)
 
 	uploader := &Uploader{
-		http:          httpClient,
-		numWorkers:    config.Workers,
-		numTransfers:  config.Transfers,
-		encryptFiles:  config.EncryptFiles,
-		randomisePart: config.RandomisePart,
-		channelID:     config.ChannelID,
-		partSize:      int64(config.PartSize),
-		pacer:         pacer,
-		ctx:           ctx,
-		progress:      progress,
-		wg:            &wg,
+		http:            httpClient,
+		numWorkers:      config.Workers,
+		concurrentFiles: concurrentFiles,
+		encryptFiles:    config.EncryptFiles,
+		randomisePart:   config.RandomisePart,
+		channelID:       config.ChannelID,
+		partSize:        int64(config.PartSize),
+		pacer:           pacer,
+		ctx:             ctx,
+		progress:        progress,
+		wg:              &wg,
 	}
 
 	err = uploader.createRemoteDir(*destDir)
