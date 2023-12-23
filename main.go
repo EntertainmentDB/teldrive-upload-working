@@ -47,7 +47,7 @@ type Config struct {
 	Workers       int           `envconfig:"WORKERS" default:"4"`
 	Transfers     int           `envconfig:"TRANSFERS" default:"4"`
 	RandomisePart bool          `envconfig:"RANDOMISE_PART" default:"true"`
-	EncryptFiles  bool          `envconfig:"ENCRYPT_FILES" default:"true"`
+	EncryptFiles  bool          `envconfig:"ENCRYPT_FILES" default:"false"`
 	ChannelID     int64         `envconfig:"CHANNEL_ID"`
 }
 

@@ -12,8 +12,9 @@ SESSION_TOKEN="" #user session token which can be fetched from teldrive app from
 PART_SIZE=1000M # Same as Rclone Size Format
 CHANNEL_ID=0 # Channel ID where files will be saved if not set default will be used which is set from UI
 WORKERS=4 # Number of current workers to use when uploading multi-parts of a big file, increase this to attain higher speeds with large files (4 is default)
+TRANSFERS=4 # Number of current files to upload at the same time.
 RANDOMISE_PART=true # Set random name to uploaded file (default true)
-ENCRYPT_FILES=true # Encrypt your files using teldrive encryption
+ENCRYPT_FILES=false # Encrypt your files using teldrive encryption (default false)
 ```
 - Smaller part size will give max upload speed.
 - Download release binary of teldrive upload from releases section.
