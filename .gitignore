@@ -22,6 +22,9 @@ go.work
 .vscode
 bin
 
+uploader
+teldrive-upload
+
 *.env
 *.env.example
 *.env.local
