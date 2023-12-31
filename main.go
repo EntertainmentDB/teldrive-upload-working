@@ -340,8 +340,8 @@ func (u *Uploader) uploadFile(filePath string, destDir string) error {
 			end = fileSize
 		}
 
-		concurrentWorkers <- struct{}{}
 		wg.Add(1)
+		concurrentWorkers <- struct{}{}
 
 		go func(partNumber int64, start, end int64) {
 			defer wg.Done()
