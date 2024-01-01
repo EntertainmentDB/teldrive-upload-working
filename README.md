@@ -7,14 +7,16 @@
 - Create the `upload.env` file with variables given below
 
 ```shell
-API_URL="http://localhost:8000" # url of hosted app
-SESSION_TOKEN="" #user session token which can be fetched from teldrive app from cokies
-PART_SIZE=1000M # Same as Rclone Size Format
-CHANNEL_ID=0 # Channel ID where files will be saved if not set default will be used which is set from UI
-WORKERS=4 # Number of current workers to use when uploading multi-parts of a big file, increase this to attain higher speeds with large files (4 is default)
-TRANSFERS=4 # Number of current files to upload at the same time. (default 4)
-RANDOMISE_PART=true # Set random name to uploaded file (default true)
-ENCRYPT_FILES=false # Encrypt your files using teldrive encryption (default false)
+API_URL="http://localhost:8080" # URL of hosted app
+SESSION_TOKEN="" # User session token, obtainable from Teldrive app cookies
+PART_SIZE=500M # Same as Rclone Size Format
+CHANNEL_ID=0 # Channel ID where files will be saved; if not set, the default will be used as set from the UI
+WORKERS=4 # Number of workers to use when uploading multi-parts of a big file; increase for higher speeds with large files (default is 4)
+TRANSFERS=4 # Number of files to upload simultaneously (default is 4)
+RANDOMISE_PART=true # Set random name to uploaded file (default is true)
+ENCRYPT_FILES=false # Encrypt your files using Teldrive encryption (default is false)
+DELETE_AFTER_UPLOAD=false # Delete each file immediately after a successful upload
+
 ```
 - Smaller part size will give max upload speed.
 - Download release binary of teldrive upload from releases section.

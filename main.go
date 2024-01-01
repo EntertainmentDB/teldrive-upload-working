@@ -41,14 +41,15 @@ var Error = log.New(os.Stdout, "\u001b[31mERROR: \u001b[0m", log.LstdFlags|log.L
 var Debug = log.New(os.Stdout, "\u001b[36mDEBUG: \u001B[0m", log.LstdFlags|log.Lshortfile)
 
 type Config struct {
-	ApiURL        string        `envconfig:"API_URL" required:"true"`
-	SessionToken  string        `envconfig:"SESSION_TOKEN" required:"true"`
-	PartSize      fs.SizeSuffix `envconfig:"PART_SIZE"`
-	Workers       int           `envconfig:"WORKERS" default:"4"`
-	Transfers     int           `envconfig:"TRANSFERS" default:"4"`
-	RandomisePart bool          `envconfig:"RANDOMISE_PART" default:"true"`
-	EncryptFiles  bool          `envconfig:"ENCRYPT_FILES" default:"false"`
-	ChannelID     int64         `envconfig:"CHANNEL_ID"`
+	ApiURL            string        `envconfig:"API_URL" required:"true"`
+	SessionToken      string        `envconfig:"SESSION_TOKEN" required:"true"`
+	PartSize          fs.SizeSuffix `envconfig:"PART_SIZE"`
+	Workers           int           `envconfig:"WORKERS" default:"4"`
+	Transfers         int           `envconfig:"TRANSFERS" default:"4"`
+	RandomisePart     bool          `envconfig:"RANDOMISE_PART" default:"true"`
+	EncryptFiles      bool          `envconfig:"ENCRYPT_FILES" default:"false"`
+	ChannelID         int64         `envconfig:"CHANNEL_ID"`
+	DeleteAfterUpload bool          `envconfig:"DELETE_AFTER_UPLOAD"`
 }
 
 type PartFile struct {
@@ -113,17 +114,18 @@ type ReadMetadataResponse struct {
 }
 
 type Uploader struct {
-	http            *rest.Client
-	numWorkers      int
-	concurrentFiles chan struct{}
-	partSize        int64
-	encryptFiles    bool
-	randomisePart   bool
-	channelID       int64
-	pacer           *fs.Pacer
-	ctx             context.Context
-	progress        *mpb.Progress
-	wg              *sync.WaitGroup
+	http              *rest.Client
+	numWorkers        int
+	concurrentFiles   chan struct{}
+	partSize          int64
+	encryptFiles      bool
+	randomisePart     bool
+	channelID         int64
+	deleteAfterUpload bool
+	pacer             *fs.Pacer
+	ctx               context.Context
+	progress          *mpb.Progress
+	wg                *sync.WaitGroup
 }
 
 var retryErrorCodes = []int{
@@ -606,6 +608,16 @@ func (u *Uploader) uploadFilesInDirectory(sourcePath string, destDir string) err
 					err := u.uploadFile(fullPath, destDir)
 					if err != nil {
 						Error.Println("upload failed:", err)
+						return
+					}
+
+					if u.deleteAfterUpload {
+						err = os.Remove(fullPath)
+						if err != nil {
+							Error.Printf("error deleting file \"%s\" %s", fullPath, err)
+							return
+						}
+						// Info.Println("deleted file:", fullPath)
 					}
 				}(entry)
 			} else {
@@ -668,17 +680,18 @@ func main() {
 	}
 
 	uploader := &Uploader{
-		http:            httpClient,
-		numWorkers:      numWorkers,
-		concurrentFiles: concurrentFiles,
-		encryptFiles:    config.EncryptFiles,
-		randomisePart:   config.RandomisePart,
-		channelID:       config.ChannelID,
-		partSize:        int64(config.PartSize),
-		pacer:           pacer,
-		ctx:             ctx,
-		progress:        progress,
-		wg:              &wg,
+		http:              httpClient,
+		numWorkers:        numWorkers,
+		concurrentFiles:   concurrentFiles,
+		encryptFiles:      config.EncryptFiles,
+		randomisePart:     config.RandomisePart,
+		channelID:         config.ChannelID,
+		deleteAfterUpload: config.DeleteAfterUpload,
+		partSize:          int64(config.PartSize),
+		pacer:             pacer,
+		ctx:               ctx,
+		progress:          progress,
+		wg:                &wg,
 	}
 
 	err = uploader.createRemoteDir(*destDir)
