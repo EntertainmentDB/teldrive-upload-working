@@ -694,7 +694,12 @@ func main() {
 		wg:                &wg,
 	}
 
-	err = uploader.createRemoteDir(*destDir)
+	path := *destDir
+	if len(path) == 0 || path[0] != '/' {
+		path = "/" + path
+	}
+
+	err = uploader.createRemoteDir(path)
 
 	if err != nil {
 		Error.Fatalln(err)
@@ -702,13 +707,13 @@ func main() {
 
 	if fileInfo, err := os.Stat(*sourcePath); err == nil {
 		if fileInfo.IsDir() {
-			err := uploader.uploadFilesInDirectory(*sourcePath, *destDir)
+			err := uploader.uploadFilesInDirectory(*sourcePath, path)
 			if err != nil {
 				Error.Println("upload failed:", err)
 			}
 			uploader.progress.Wait()
 		} else {
-			if err := uploader.uploadFile(*sourcePath, *destDir); err != nil {
+			if err := uploader.uploadFile(*sourcePath, path); err != nil {
 				Error.Println("upload failed:", err)
 			}
 		}
