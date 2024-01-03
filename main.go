@@ -115,7 +115,12 @@ func main() {
 		log,
 	)
 
-	err = uploader.CreateRemoteDir(*destDir)
+	path := *destDir
+	if len(path) == 0 || path[0] != '/' {
+		path = "/" + path
+	}
+
+	err = uploader.CreateRemoteDir(path)
 
 	if err != nil {
 		log.Fatal("create remote failed", zap.Error(err))
@@ -124,12 +129,12 @@ func main() {
 
 	if fileInfo, err := os.Stat(*sourcePath); err == nil {
 		if fileInfo.IsDir() {
-			err := uploader.UploadFilesInDirectory(*sourcePath, *destDir)
+			err := uploader.UploadFilesInDirectory(*sourcePath, path)
 			if err != nil {
 				log.Fatal("upload failed", zap.Error(err))
 			}
 		} else {
-			if err := uploader.UploadFile(*sourcePath, *destDir); err != nil {
+			if err := uploader.UploadFile(*sourcePath, path); err != nil {
 				log.Fatal("upload failed", zap.Error(err))
 			}
 		}
