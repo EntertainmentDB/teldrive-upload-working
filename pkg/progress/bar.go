@@ -223,16 +223,16 @@ func (b *Bar) getBar() (string, error) {
 			b.config.onCompletion()
 		}
 	}
-	// if b.state.finished {
-	// 	// when using ANSI codes we don't pre-clean the current line
-	// 	if b.config.useANSICodes && b.config.clearOnFinish {
-	// 		err := clearProgressBar(b.config, b.state)
-	// 		if err != nil {
-	// 			return "", err
-	// 		}
-	// 	}
-	// 	return "", nil
-	// }
+	if b.state.completed {
+		// when using ANSI codes we don't pre-clean the current line
+		// if b.config.useANSICodes && b.config.clearOnFinish {
+		// 	err := clearProgressBar(b.config, b.state)
+		// 	if err != nil {
+		// 		return "", err
+		// 	}
+		// }
+		return "", nil
+	}
 
 	// then, re-render the current progress bar
 	w, strBar, err := barString(&b.config, &b.state)

@@ -86,6 +86,9 @@ func (p *Progress) render() error {
 		if err != nil {
 			return err
 		}
+		if bar.state.completed {
+			continue
+		}
 		strProgress.WriteString("\n")
 		strProgress.WriteString(strBar)
 
