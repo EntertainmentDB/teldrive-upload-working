@@ -3,12 +3,14 @@ package main
 import (
 	"context"
 	"fmt"
+	"log"
 	"net/http"
 	"os"
 	"strconv"
 	"sync"
 	"time"
 	"uploader/pkg/logger"
+	"uploader/pkg/progress"
 	"uploader/pkg/services"
 	"uploader/pkg/types"
 
@@ -18,7 +20,7 @@ import (
 	"github.com/rclone/rclone/fs"
 	"github.com/rclone/rclone/lib/pacer"
 	"github.com/rclone/rclone/lib/rest"
-	"github.com/vbauerster/mpb/v8"
+	"go.uber.org/zap"
 
 	"github.com/joho/godotenv"
 )
@@ -58,8 +60,13 @@ func main() {
 	config, err := loadConfigFromEnv()
 
 	if err != nil {
-		logger.Error.Fatalln(err)
+		log.Fatalln(err)
 	}
+
+	var wg sync.WaitGroup
+	// prg := progress.NewProgress(&wg)
+	// progressWriterAdapter := &logger.ProgressWriterAdapter{Progress: prg}
+	log := logger.InitLogger()
 
 	authCookie := &http.Cookie{
 		Name:  "user-session",
@@ -73,15 +80,15 @@ func main() {
 	pacer := fs.NewPacer(ctx, pacer.NewDefault(pacer.MinSleep(400*time.Millisecond),
 		pacer.MaxSleep(5*time.Second), pacer.DecayConstant(2), pacer.AttackConstant(0)))
 
-	var wg sync.WaitGroup
-	progress := mpb.New(mpb.WithWaitGroup(&wg))
+	// prg := mpb.New(mpb.WithWaitGroup(&wg))
+	prg := progress.NewProgress(&wg, progress.OptionSetWriter(os.Stderr))
 
 	numTransfers := config.Transfers
 	if *transfers != "" {
 		numTransfers, err = strconv.Atoi(*transfers)
 	}
 	if err != nil {
-		logger.Error.Fatalln("transfers flag must be a number", err)
+		log.Fatal("transfers flag must be a number", zap.Error(err))
 	}
 
 	numWorkers := config.Workers
@@ -89,7 +96,7 @@ func main() {
 		numWorkers, err = strconv.Atoi(*workers)
 	}
 	if err != nil {
-		logger.Error.Fatalln("workers flag must be a number", err)
+		log.Fatal("workers flag must be a number", zap.Error(err))
 	}
 
 	uploader := services.NewUploadService(
@@ -103,30 +110,34 @@ func main() {
 		config.DeleteAfterUpload,
 		pacer,
 		ctx,
-		progress,
-		&wg)
+		prg,
+		&wg,
+		log,
+	)
 
 	err = uploader.CreateRemoteDir(*destDir)
 
 	if err != nil {
-		logger.Error.Fatalln(err)
+		log.Fatal("create remote failed", zap.Error(err))
 	}
+	stopProgress := uploader.Progress.StartProgress()
 
 	if fileInfo, err := os.Stat(*sourcePath); err == nil {
 		if fileInfo.IsDir() {
 			err := uploader.UploadFilesInDirectory(*sourcePath, *destDir)
 			if err != nil {
-				logger.Error.Println("upload failed:", err)
+				log.Fatal("upload failed", zap.Error(err))
 			}
-			uploader.Progress.Wait()
 		} else {
 			if err := uploader.UploadFile(*sourcePath, *destDir); err != nil {
-				logger.Error.Println("upload failed:", err)
+				log.Fatal("upload failed", zap.Error(err))
 			}
 		}
 	} else {
-		logger.Error.Fatalln(err)
+		log.Fatal(err.Error())
 	}
+	uploader.Progress.Wait()
+	stopProgress()
 
-	logger.Info.Println("Uploads complete!")
+	log.Info("Uploads complete!")
 }

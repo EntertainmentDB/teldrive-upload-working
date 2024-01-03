@@ -1,0 +1,57 @@
+// package progress
+
+import (
+	"fmt"
+	"strings"
+
+	"github.com/rclone/rclone/lib/terminal"
+)
+
+type Progress struct {
+	Total   int64
+	Current int64
+	Name    string
+}
+
+// NewProgress inicializa una nueva estructura Progress con la configuración proporcionada
+func NewProgress(total int64, name string) *Progress {
+	return &Progress{
+		Total:   total,
+		Current: 0,
+		Name:    name,
+	}
+}
+
+// UpdateProgress actualiza y muestra la barra de progreso para una instancia Progress
+func (p *Progress) UpdateProgress() {
+	var progressBarWidth int64 = 50
+	// Calcula la cantidad de caracteres '=' en la barra de progreso
+	completed := int(progressBarWidth * p.Current / p.Total)
+	// Crea la barra de progreso con caracteres '=' y espacios en blanco
+	progressBar := "[" + strings.Repeat("=", completed) + strings.Repeat(" ", int(progressBarWidth)-completed) + "]"
+	// Crea el mensaje completo
+	message := fmt.Sprintf("\r%s: %s %.2f%%", p.Name, progressBar, float64(p.Current*100)/float64(p.Total))
+
+	// Escribe el mensaje en la terminal
+	terminal.Write([]byte(message))
+
+	// Limpia la línea si llega al final
+	if p.Current == p.Total {
+		terminal.Write([]byte("\n"))
+	}
+}
+
+// SetTotal establece el valor total en una instancia Progress
+func (p *Progress) SetTotal(total int64) {
+	p.Total = total
+}
+
+// Increment incrementa el progreso actual en una instancia Progress
+func (p *Progress) IncrInt64(n int64) {
+	p.Current += n
+}
+
+// SetCurrent establece el progreso actual en una instancia Progress
+func (p *Progress) SetCurrent(current int64) {
+	p.Current = current
+}
