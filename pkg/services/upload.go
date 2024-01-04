@@ -15,8 +15,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"time"
-	"uploader/pkg/progress"
+	"uploader/pkg/pb"
 	"uploader/pkg/types"
 
 	"github.com/gofrs/uuid"
@@ -57,12 +56,12 @@ type UploadService struct {
 	deleteAfterUpload bool
 	pacer             *fs.Pacer
 	ctx               context.Context
-	Progress          *progress.Progress
+	Progress          *pb.Progress
 	wg                *sync.WaitGroup
 	logger            *zap.Logger
 }
 
-func NewUploadService(http *rest.Client, numWorkers int, numTransfers int, partSize int64, encryptFiles bool, randomisePart bool, channelID int64, deleteAfterUpload bool, pacer *fs.Pacer, ctx context.Context, progress *progress.Progress, wg *sync.WaitGroup, logger *zap.Logger) *UploadService {
+func NewUploadService(http *rest.Client, numWorkers int, numTransfers int, partSize int64, encryptFiles bool, randomisePart bool, channelID int64, deleteAfterUpload bool, pacer *fs.Pacer, ctx context.Context, progress *pb.Progress, wg *sync.WaitGroup, logger *zap.Logger) *UploadService {
 	return &UploadService{
 		http:              http,
 		numWorkers:        numWorkers,
@@ -134,7 +133,7 @@ func (u *UploadService) UploadFile(filePath string, destDir string) error {
 	fileName := filepath.Base(filePath)
 
 	if u.checkFileExists(fileName, destDir) {
-		u.logger.Info("file exists:", zap.String("fileName", fileName))
+		u.logger.Info("file exists", zap.String("fileName", fileName))
 		return nil
 	}
 
@@ -196,23 +195,22 @@ func (u *UploadService) UploadFile(filePath string, destDir string) error {
 	// 	return fileName
 	// }(fileName)
 
-	bar := progress.NewOptions64(fileSize,
-		progress.OptionShowCount(),
-		// progress.OptionSetWriter(os.Stderr),
-		progress.OptionEnableColorCodes(true),
-		progress.OptionShowBytes(true),
-		progress.OptionSetWidth(10),
-		progress.OptionThrottle(65*time.Millisecond),
-		progress.OptionSetDescription(fileName),
-		progress.OptionSetTheme(progress.Theme{
+	bar := pb.NewOptions64(fileSize,
+		pb.OptionShowCount(),
+		// pb.OptionSetWriter(os.Stderr),
+		pb.OptionEnableColorCodes(true),
+		pb.OptionShowBytes(true),
+		pb.OptionSetWidth(10),
+		pb.OptionSetDescription(fileName),
+		pb.OptionSetTheme(pb.Theme{
 			Saucer:        "[green]=[reset]",
 			SaucerHead:    "[green]>[reset]",
 			SaucerPadding: " ",
 			BarStart:      "[",
 			BarEnd:        "]",
 		}),
-		progress.OptionFullWidth(),
-		progress.OptionSetRenderBlankState(true))
+		pb.OptionFullWidth(),
+		pb.OptionSetRenderBlankState(true))
 
 	defer bar.Close()
 
@@ -235,13 +233,13 @@ func (u *UploadService) UploadFile(filePath string, destDir string) error {
 	// 	),
 	// }
 
-	// bar = u.Progress.AddBar(fileSize,
+	// bar = u.pb.AddBar(fileSize,
 	// 	barOptions...,
 	// )
-	// myBar := u.Progress.AddBar(fileName, fileSize)
-	// stopProgress := myProgress.StartProgress()
+	// myBar := u.pb.AddBar(fileName, fileSize)
+	// stopProgress := pb.StartProgress()
 	// u.progress = mpb.New(mpb.WithWidth(64))
-	// bar = u.progress.New(fileSize,
+	// bar = u.pb.New(fileSize,
 	// 	mpb.BarStyle().Rbound("|"),
 	// 	barOptions...,
 	// )
@@ -515,8 +513,8 @@ func (u *UploadService) UploadFilesInDirectory(sourcePath string, destDir string
 		} else {
 			exists := u.checkFileExistsInDirectory(entry.Name(), filesInRemote)
 			if !exists {
-				u.concurrentFiles <- struct{}{}
 				u.wg.Add(1)
+				u.concurrentFiles <- struct{}{}
 
 				go func(file os.DirEntry) {
 					defer u.wg.Done()
@@ -540,10 +538,50 @@ func (u *UploadService) UploadFilesInDirectory(sourcePath string, destDir string
 					}
 				}(entry)
 			} else {
+				fileInfo, err := os.Stat(fullPath)
+				if err == nil {
+					u.Progress.AddExisting(float64(fileInfo.Size()))
+				}
 				u.logger.Info("file exists:", zap.String("fileName", entry.Name()))
 			}
 		}
 	}
 
 	return nil
+}
+
+func (u *UploadService) GetFilesInDirectoryInfo(sourcePath string) (FileInfo, error) {
+	entries, err := os.ReadDir(sourcePath)
+	if err != nil {
+		return FileInfo{}, err
+	}
+
+	var info FileInfo
+
+	for _, entry := range entries {
+		fullPath := filepath.Join(sourcePath, entry.Name())
+
+		if entry.IsDir() {
+			subInfo, err := u.GetFilesInDirectoryInfo(fullPath)
+			if err != nil {
+				return FileInfo{}, err
+			}
+
+			info.TotalFiles += subInfo.TotalFiles
+			info.TotalSize += subInfo.TotalSize
+		} else {
+			info.TotalFiles++
+			fileInfo, err := os.Stat(fullPath)
+			if err == nil {
+				info.TotalSize += fileInfo.Size()
+			}
+		}
+	}
+
+	return info, nil
+}
+
+type FileInfo struct {
+	TotalFiles int
+	TotalSize  int64
 }

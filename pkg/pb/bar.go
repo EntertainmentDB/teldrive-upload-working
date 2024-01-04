@@ -1,4 +1,4 @@
-package progress
+package pb
 
 import (
 	"errors"
@@ -150,7 +150,7 @@ func (b *Bar) IncrInt64(num int64) error {
 func (b *Bar) Describe(description string) {
 	b.lock.Lock()
 	defer b.lock.Unlock()
-	b.config.description = description
+	b.state.description = description
 	if b.config.invisible {
 		return
 	}
@@ -189,9 +189,14 @@ func (b *Bar) ChangeMax64(newMax int64) {
 	b.IncrInt(0) // re-render
 }
 
-// IsFinished returns true if progress bar is completed
+// IsFinished returns true if progress bar is finished
 func (b *Bar) IsFinished() bool {
 	return b.state.finished
+}
+
+// IsCompleted returns true if progress bar is completed
+func (b *Bar) IsCompleted() bool {
+	return b.state.completed
 }
 
 // getBar renders the progress bar, updating the maximum
@@ -217,13 +222,13 @@ func (b *Bar) getBar() (string, error) {
 	if !b.state.finished && b.state.currentNum >= b.config.max {
 		b.state.finished = true
 		if !b.config.clearOnFinish {
-			barString(&b.config, &b.state)
+			getBarString(&b.config, &b.state)
 		}
 		if b.config.onCompletion != nil {
 			b.config.onCompletion()
 		}
 	}
-	if b.state.completed {
+	if b.IsCompleted() {
 		// when using ANSI codes we don't pre-clean the current line
 		// if b.config.useANSICodes && b.config.clearOnFinish {
 		// 	err := clearProgressBar(b.config, b.state)
@@ -235,7 +240,7 @@ func (b *Bar) getBar() (string, error) {
 	}
 
 	// then, re-render the current progress bar
-	w, strBar, err := barString(&b.config, &b.state)
+	w, strBar, err := getBarString(&b.config, &b.state)
 	if err != nil {
 		return "", err
 	}

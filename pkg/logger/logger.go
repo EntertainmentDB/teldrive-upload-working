@@ -1,9 +1,8 @@
 package logger
 
 import (
-	"os"
 	"time"
-	"uploader/pkg/progress"
+	"uploader/pkg/pb"
 
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
@@ -11,7 +10,7 @@ import (
 )
 
 type ProgressWriterAdapter struct {
-	Progress *progress.Progress
+	Progress *pb.Progress
 }
 
 // func (pwa *ProgressWriterAdapter) Write(p []byte) (n int, err error) {
@@ -26,22 +25,22 @@ func InitLogger() *zap.Logger {
 	}
 	var (
 		consoleConfig zapcore.EncoderConfig
-		logLevel      zapcore.Level
+		// logLevel      zapcore.Level
 	)
 
 	dev := false
 
 	if dev {
 		consoleConfig = zap.NewDevelopmentEncoderConfig()
-		logLevel = zap.DebugLevel
+		// logLevel = zap.DebugLevel
 	} else {
 
 		consoleConfig = zap.NewProductionEncoderConfig()
-		logLevel = zap.InfoLevel
+		// logLevel = zap.InfoLevel
 	}
 	consoleConfig.EncodeLevel = zapcore.CapitalColorLevelEncoder
 	consoleConfig.EncodeTime = customTimeEncoder
-	consoleEncoder := zapcore.NewConsoleEncoder(consoleConfig)
+	// consoleEncoder := zapcore.NewConsoleEncoder(consoleConfig)
 
 	fileEncoderConfig := zap.NewProductionEncoderConfig()
 	fileEncoderConfig.EncodeTime = zapcore.ISO8601TimeEncoder
@@ -56,7 +55,7 @@ func InitLogger() *zap.Logger {
 	})
 
 	core := zapcore.NewTee(
-		zapcore.NewCore(consoleEncoder, zapcore.AddSync(os.Stdout), logLevel),
+		// zapcore.NewCore(consoleEncoder, zapcore.AddSync(os.Stdout), logLevel),
 		zapcore.NewCore(fileEncoder, fileWriter, zapcore.DebugLevel),
 		// zapcore.NewCore(zapcore.NewConsoleEncoder(consoleConfig), zapcore.AddSync(progressWriterAdapter), logLevel),
 	)

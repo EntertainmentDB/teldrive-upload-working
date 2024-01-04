@@ -6,11 +6,12 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"runtime"
 	"strconv"
 	"sync"
 	"time"
 	"uploader/pkg/logger"
-	"uploader/pkg/progress"
+	"uploader/pkg/pb"
 	"uploader/pkg/services"
 	"uploader/pkg/types"
 
@@ -53,11 +54,31 @@ func main() {
 	flag.Parse()
 
 	if *sourcePath == "" || *destDir == "" {
+		if runtime.GOOS == "windows" {
+			fmt.Println("Usage: ./uploader.exe -path <file_or_directory_path> -dest <remote_directory>")
+			return
+		}
 		fmt.Println("Usage: ./uploader -path <file_or_directory_path> -dest <remote_directory>")
 		return
 	}
 
 	config, err := loadConfigFromEnv()
+
+	numTransfers := config.Transfers
+	if *transfers != "" {
+		numTransfers, err = strconv.Atoi(*transfers)
+	}
+	if err != nil {
+		log.Fatal("transfers flag must be a number", zap.Error(err))
+	}
+
+	numWorkers := config.Workers
+	if *workers != "" {
+		numWorkers, err = strconv.Atoi(*workers)
+	}
+	if err != nil {
+		log.Fatal("workers flag must be a number", zap.Error(err))
+	}
 
 	if err != nil {
 		log.Fatalln(err)
@@ -80,24 +101,12 @@ func main() {
 	pacer := fs.NewPacer(ctx, pacer.NewDefault(pacer.MinSleep(400*time.Millisecond),
 		pacer.MaxSleep(5*time.Second), pacer.DecayConstant(2), pacer.AttackConstant(0)))
 
-	// prg := mpb.New(mpb.WithWaitGroup(&wg))
-	prg := progress.NewProgress(&wg, progress.OptionSetWriter(os.Stderr))
-
-	numTransfers := config.Transfers
-	if *transfers != "" {
-		numTransfers, err = strconv.Atoi(*transfers)
-	}
-	if err != nil {
-		log.Fatal("transfers flag must be a number", zap.Error(err))
-	}
-
-	numWorkers := config.Workers
-	if *workers != "" {
-		numWorkers, err = strconv.Atoi(*workers)
-	}
-	if err != nil {
-		log.Fatal("workers flag must be a number", zap.Error(err))
-	}
+	// progress := mpb.New(mpb.WithWaitGroup(&wg))
+	progress := pb.NewProgress(
+		&wg,
+		pb.OptionSetWriter(os.Stderr),
+		pb.OptionThrottle(65*time.Millisecond),
+	)
 
 	uploader := services.NewUploadService(
 		httpClient,
@@ -110,7 +119,7 @@ func main() {
 		config.DeleteAfterUpload,
 		pacer,
 		ctx,
-		prg,
+		progress,
 		&wg,
 		log,
 	)
@@ -129,7 +138,12 @@ func main() {
 
 	if fileInfo, err := os.Stat(*sourcePath); err == nil {
 		if fileInfo.IsDir() {
-			err := uploader.UploadFilesInDirectory(*sourcePath, path)
+			info, err := uploader.GetFilesInDirectoryInfo(*sourcePath)
+			if err != nil {
+				log.Fatal("get files in directory info failed", zap.Error(err))
+			}
+			uploader.Progress.AddTransfer(info.TotalFiles, info.TotalSize)
+			err = uploader.UploadFilesInDirectory(*sourcePath, path)
 			if err != nil {
 				log.Fatal("upload failed", zap.Error(err))
 			}

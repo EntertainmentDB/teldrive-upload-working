@@ -1,4 +1,4 @@
-package progress
+package pb
 
 import (
 	"fmt"
@@ -24,6 +24,9 @@ type BarState struct {
 }
 
 type barState struct {
+	originalDescription string
+	description         string
+
 	currentNum        int64
 	currentPercent    int
 	lastPercent       int
@@ -36,6 +39,7 @@ type barState struct {
 	counterTime         time.Time
 	counterNumSinceLast int64
 	counterLastTenRates []float64
+	averageRate         float64
 
 	maxLineWidth int
 	currentBytes float64
@@ -55,7 +59,6 @@ type barConfig struct {
 	// writer               io.Writer
 	theme                Theme
 	renderWithBlankState bool
-	description          string
 	iterationString      string
 	ignoreLength         bool // ignoreLength if max bytes not known
 
@@ -179,18 +182,8 @@ func OptionSetRenderBlankState(r bool) BarOption {
 // OptionSetDescription sets the description of the bar to render in front of it
 func OptionSetDescription(description string) BarOption {
 	return func(p *Bar) {
-		shortenedName := func(name string) string {
-			const maxFileNameLength = 61
-			nameLength := runewidth.StringWidth(name)
-
-			if nameLength > maxFileNameLength {
-				half := (maxFileNameLength - 3) / 2
-				return runewidth.Truncate(name, half, "") + "..." + runewidth.TruncateLeft(name, nameLength-half, "")
-			} else {
-				return runewidth.FillLeft(name, maxFileNameLength)
-			}
-		}(description)
-		p.config.description = shortenedName
+		p.state.description = description
+		p.state.originalDescription = description
 	}
 }
 
@@ -241,14 +234,6 @@ func OptionShowElapsedTimeOnFinish() BarOption {
 func OptionSetItsString(iterationString string) BarOption {
 	return func(p *Bar) {
 		p.config.iterationString = iterationString
-	}
-}
-
-// OptionThrottle will wait the specified duration before updating again. The default
-// duration is 0 seconds.
-func OptionThrottle(duration time.Duration) BarOption {
-	return func(p *Bar) {
-		p.config.throttleDuration = duration
 	}
 }
 
@@ -377,7 +362,6 @@ func DefaultBytes(maxBytes int64, description ...string) *Bar {
 		// OptionSetWriter(os.Stderr),
 		OptionShowBytes(true),
 		OptionSetWidth(10),
-		OptionThrottle(65*time.Millisecond),
 		OptionShowCount(),
 		OptionOnCompletion(func() {
 			fmt.Fprint(os.Stderr, "\n")
@@ -403,7 +387,6 @@ func DefaultBytesSilent(maxBytes int64, description ...string) *Bar {
 		// OptionSetWriter(io.Discard),
 		OptionShowBytes(true),
 		OptionSetWidth(10),
-		OptionThrottle(65*time.Millisecond),
 		OptionShowCount(),
 		OptionSpinnerType(14),
 		OptionFullWidth(),
@@ -422,7 +405,6 @@ func Default(max int64, description ...string) *Bar {
 		OptionSetDescription(desc),
 		// OptionSetWriter(os.Stderr),
 		OptionSetWidth(10),
-		OptionThrottle(65*time.Millisecond),
 		OptionShowCount(),
 		OptionShowIts(),
 		OptionOnCompletion(func() {
@@ -448,7 +430,6 @@ func DefaultSilent(max int64, description ...string) *Bar {
 		OptionSetDescription(desc),
 		// OptionSetWriter(io.Discard),
 		OptionSetWidth(10),
-		OptionThrottle(65*time.Millisecond),
 		OptionShowCount(),
 		OptionShowIts(),
 		OptionSpinnerType(14),
@@ -488,17 +469,17 @@ func getStringWidth(c *barConfig, str string, colorize bool) int {
 	return stringWidth
 }
 
-func barString(c *barConfig, s *barState) (int, string, error) {
+func getBarString(c *barConfig, s *barState) (int, string, error) {
 	var sb strings.Builder
 
-	averageRate := average(s.counterLastTenRates)
+	s.averageRate = average(s.counterLastTenRates)
 	if len(s.counterLastTenRates) == 0 || s.finished {
 		// if no average samples, or if finished,
 		// then average rate should be the total rate
 		if t := time.Since(s.startTime).Seconds(); t > 0 {
-			averageRate = s.currentBytes / t
+			s.averageRate = s.currentBytes / t
 		} else {
-			averageRate = 0
+			s.averageRate = 0
 		}
 	}
 
@@ -534,13 +515,13 @@ func barString(c *barConfig, s *barState) (int, string, error) {
 
 	if !s.finished {
 		// show rolling average rate
-		if c.showBytes && averageRate > 0 && !math.IsInf(averageRate, 1) {
+		if c.showBytes && s.averageRate > 0 && !math.IsInf(s.averageRate, 1) {
 			if sb.Len() == 0 {
 				sb.WriteString("(")
 			} else {
 				sb.WriteString(", ")
 			}
-			currentHumanize, currentSuffix := humanizeBytes(averageRate, c.useIECUnits)
+			currentHumanize, currentSuffix := humanizeBytes(s.averageRate, c.useIECUnits)
 			sb.WriteString(fmt.Sprintf("%s%s/s", currentHumanize, currentSuffix))
 		}
 
@@ -551,12 +532,12 @@ func barString(c *barConfig, s *barState) (int, string, error) {
 			} else {
 				sb.WriteString(", ")
 			}
-			if averageRate > 1 {
-				sb.WriteString(fmt.Sprintf("%0.0f %s/s", averageRate, c.iterationString))
-			} else if averageRate*60 > 1 {
-				sb.WriteString(fmt.Sprintf("%0.0f %s/min", 60*averageRate, c.iterationString))
+			if s.averageRate > 1 {
+				sb.WriteString(fmt.Sprintf("%0.0f %s/s", s.averageRate, c.iterationString))
+			} else if s.averageRate*60 > 1 {
+				sb.WriteString(fmt.Sprintf("%0.0f %s/min", 60*s.averageRate, c.iterationString))
 			} else {
-				sb.WriteString(fmt.Sprintf("%0.0f %s/hr", 3600*averageRate, c.iterationString))
+				sb.WriteString(fmt.Sprintf("%0.0f %s/hr", 3600*s.averageRate, c.iterationString))
 			}
 		}
 	}
@@ -570,7 +551,7 @@ func barString(c *barConfig, s *barState) (int, string, error) {
 	// show time prediction in "current/total" seconds format
 	switch {
 	case c.predictTime:
-		rightBracNum := (time.Duration((1/averageRate)*(float64(c.max)-float64(s.currentNum))) * time.Second)
+		rightBracNum := (time.Duration((1/s.averageRate)*(float64(c.max)-float64(s.currentNum))) * time.Second)
 		if rightBracNum.Seconds() < 0 {
 			rightBracNum = 0 * time.Second
 		}
@@ -601,7 +582,7 @@ func barString(c *barConfig, s *barState) (int, string, error) {
 			statusWhenFinishing = 3
 		}
 
-		c.width = width - getStringWidth(c, c.description, true) - 10 - amend - sb.Len() - len(leftBrac) - len(rightBrac) - statusWhenFinishing - 1
+		c.width = width - getStringWidth(c, s.description, true) - 10 - amend - sb.Len() - len(leftBrac) - len(rightBrac) - statusWhenFinishing - 1
 		s.currentSaucerSize = int(float64(s.currentPercent) / 100.0 * float64(c.width))
 	}
 	if s.currentSaucerSize > 0 {
@@ -652,11 +633,11 @@ func barString(c *barConfig, s *barState) (int, string, error) {
 					spinner,
 					sb.String(),
 					leftBrac,
-					c.description)
+					s.description)
 			} else {
 				str = fmt.Sprintf("\r%s %s %s [%s] ",
 					spinner,
-					c.description,
+					s.description,
 					sb.String(),
 					leftBrac)
 			}
@@ -666,12 +647,12 @@ func barString(c *barConfig, s *barState) (int, string, error) {
 					spinner,
 					sb.String(),
 					"finishing",
-					c.description,
+					s.description,
 				)
 			} else {
 				str = fmt.Sprintf("\r%s %s %s | %s",
 					spinner,
-					c.description,
+					s.description,
 					sb.String(),
 					"finishing",
 				)
@@ -682,12 +663,12 @@ func barString(c *barConfig, s *barState) (int, string, error) {
 					spinner,
 					sb.String(),
 					"completed",
-					c.description,
+					s.description,
 				)
 			} else {
 				str = fmt.Sprintf("\r%s %s %s | %s",
 					spinner,
-					c.description,
+					s.description,
 					sb.String(),
 					"completed",
 				)
@@ -713,9 +694,9 @@ func barString(c *barConfig, s *barState) (int, string, error) {
 		}
 
 		if c.showDescriptionAtLineEnd {
-			str = fmt.Sprintf("\r%s %s ", str, c.description)
+			str = fmt.Sprintf("\r%s %s ", str, s.description)
 		} else {
-			str = fmt.Sprintf("\r%s%s ", c.description, str)
+			str = fmt.Sprintf("\r%s%s ", s.description, str)
 		}
 	} else {
 		if s.currentPercent == 100 {
@@ -739,9 +720,9 @@ func barString(c *barConfig, s *barState) (int, string, error) {
 			}
 
 			if c.showDescriptionAtLineEnd {
-				str = fmt.Sprintf("\r%s %s", str, c.description)
+				str = fmt.Sprintf("\r%s %s", str, s.description)
 			} else {
-				str = fmt.Sprintf("\r%s%s", c.description, str)
+				str = fmt.Sprintf("\r%s%s", s.description, str)
 			}
 		} else {
 			str = fmt.Sprintf("%5d%% %s%s%s%s%s %s [%s:%s]",
@@ -756,9 +737,9 @@ func barString(c *barConfig, s *barState) (int, string, error) {
 				rightBrac)
 
 			if c.showDescriptionAtLineEnd {
-				str = fmt.Sprintf("\r%s %s", str, c.description)
+				str = fmt.Sprintf("\r%s %s", str, s.description)
 			} else {
-				str = fmt.Sprintf("\r%s%s", c.description, str)
+				str = fmt.Sprintf("\r%s%s", s.description, str)
 			}
 		}
 	}

@@ -1,4 +1,4 @@
-package progress
+package pb
 
 var spinners = map[int][]string{
 	0:  {"←", "↖", "↑", "↗", "→", "↘", "↓", "↙"},

@@ -1,4 +1,4 @@
-package progress
+package pb
 
 // VT100 codes
 const (
