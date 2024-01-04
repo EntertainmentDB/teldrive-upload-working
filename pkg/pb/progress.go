@@ -224,17 +224,27 @@ func generateProgressBars(p *Progress) (string, error) {
 
 func generateProgressStats(p *Progress) string {
 	var strProgressStats strings.Builder
-	sppedHumanize, speedSuffix := humanizeBytes(p.state.totalAverageRate, false)
-	totalSizeHumanize, totalSizeSuffix := humanizeBytes(float64(p.state.totalSize), false)
+
 	uploadedBytesHumanize, uploadedBytesSuffix := humanizeBytes(float64(p.state.uploadedBytes)+p.state.existingBytes, false)
-	strProgressStats.WriteString(fmt.Sprintf("Transferred: %s, %s", fmt.Sprintf("%s%s/%s%s", uploadedBytesHumanize, uploadedBytesSuffix, totalSizeHumanize, totalSizeSuffix), fmt.Sprintf("%s%s/s", sppedHumanize, speedSuffix)))
+	totalSizeHumanize, totalSizeSuffix := humanizeBytes(float64(p.state.totalSize), false)
+	speedHumanize, speedSuffix := humanizeBytes(p.state.totalAverageRate, false)
+
+	transferredInfo := fmt.Sprintf("Transferred: %s, %s",
+		fmt.Sprintf("%s%s/%s%s, %d%%", uploadedBytesHumanize, uploadedBytesSuffix, totalSizeHumanize, totalSizeSuffix, calculatePercent(int(p.state.uploadedBytes), int(p.state.totalSize))),
+		fmt.Sprintf("%s%s/s", speedHumanize, speedSuffix),
+	)
+	strProgressStats.WriteString(transferredInfo)
 	strProgressStats.WriteString("\n")
+
+	progressInfo := ""
 	if p.state.totalTransfers != 0 {
-		strProgressStats.WriteString(fmt.Sprintf("Transferred: %d/%d, %d%%", p.state.uploaded+p.state.existing, p.state.totalTransfers, int(float64(p.state.uploaded)/float64(p.state.totalTransfers)*100)))
+		progressInfo = fmt.Sprintf("Transferred: %d/%d, %d%%", p.state.uploaded+p.state.existing, p.state.totalTransfers, calculatePercent(p.state.uploaded, p.state.totalTransfers))
 	} else {
-		strProgressStats.WriteString(fmt.Sprintf("Transferred: %d/%d, %d%%", p.state.uploaded, p.state.totalTransfers, 0))
+		progressInfo = fmt.Sprintf("Transferred: %d/%d, %d%%", p.state.uploaded, p.state.totalTransfers, 0)
 	}
+	strProgressStats.WriteString(progressInfo)
 	strProgressStats.WriteString("\n")
+
 	strProgressStats.WriteString("Transferring:")
 
 	return strProgressStats.String()
