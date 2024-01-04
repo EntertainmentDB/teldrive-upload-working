@@ -47,6 +47,7 @@ type barState struct {
 	completed bool
 	finished  bool
 	exit      bool // Progress bar exit halfway
+	error     bool
 
 	rendered string
 }
@@ -465,8 +466,8 @@ func getStringWidth(c *barConfig, str string, colorize bool) int {
 			cleanString = ansiRegex.ReplaceAllString(cleanString, "")
 		}
 	}
-	stringWidth := runewidth.StringWidth(cleanString)
-	return stringWidth
+
+	return runewidth.StringWidth(cleanString)
 }
 
 func getBarString(c *barConfig, s *barState) (int, string, error) {
@@ -754,7 +755,7 @@ func getBarString(c *barConfig, s *barState) (int, string, error) {
 	return getStringWidth(c, str, false), str, nil
 }
 
-func writeString(c progressConfig, str string) error {
+func writeStringToProgress(c progressConfig, str string) error {
 	if _, err := io.WriteString(c.writer, str); err != nil {
 		return err
 	}

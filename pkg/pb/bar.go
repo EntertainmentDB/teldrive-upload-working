@@ -218,6 +218,11 @@ func (b *Bar) getBar() (string, error) {
 	// 	}
 	// }
 
+	if b.IsCompleted() && b.state.currentNum < b.config.max {
+		b.state.error = true
+		return "", nil
+	}
+
 	// check if the progress bar is finished
 	if !b.state.finished && b.state.currentNum >= b.config.max {
 		b.state.finished = true

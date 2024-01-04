@@ -150,15 +150,25 @@ func configureOutputWriter(w io.Writer) io.Writer {
 }
 
 func truncateDescription(description string, length int) string {
-	const maxDescriptionLength = 61
+	const maxDescriptionLength = 59
 	if length > maxDescriptionLength {
 		length = maxDescriptionLength
 	}
-	nameLength := runewidth.StringWidth(description)
 
-	if nameLength > length {
+	w, _ := termSize()
+	if length > w/2 {
+		length = w / 2
+	}
+
+	if length%2 == 0 {
+		length--
+	}
+
+	descLength := runewidth.StringWidth(description)
+
+	if descLength > length {
 		half := (length - 3) / 2
-		return runewidth.Truncate(description, half, "") + "..." + runewidth.TruncateLeft(description, nameLength-half, "")
+		return runewidth.Truncate(description, half, "") + "..." + runewidth.TruncateLeft(description, descLength-half, "")
 	} else {
 		return runewidth.FillLeft(description, length)
 	}
@@ -200,7 +210,7 @@ func generateProgressBars(p *Progress) (string, error) {
 		}
 
 		strProgressBars.WriteString(strBar)
-		if i != len(bar.state.counterLastTenRates)-1 && !bar.IsCompleted() {
+		if i != len(p.Bars)-1 && !bar.IsCompleted() {
 			strProgressBars.WriteString("\n")
 		}
 
@@ -225,26 +235,47 @@ func generateProgressStats(p *Progress) string {
 		strProgressStats.WriteString(fmt.Sprintf("Transferred: %d/%d, %d%%", p.state.uploaded, p.state.totalTransfers, 0))
 	}
 	strProgressStats.WriteString("\n")
-	strProgressStats.WriteString(fmt.Sprintln("Transferring:"))
+	strProgressStats.WriteString("Transferring:")
 
 	return strProgressStats.String()
 }
 
+func WriteToFile(path string, str string) error {
+	file, err := os.Create(path)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	_, err = fmt.Fprintln(file, str)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
 func clearAndWriteProgress(config *progressConfig, strProgressStats string, strProgressBars string) {
 	for i := 0; i < nlines-1; i++ {
-		writeString(*config, EraseLine)
-		writeString(*config, MoveUp)
+		writeStringToProgress(*config, EraseLine)
+		writeStringToProgress(*config, MoveUp)
 	}
-	writeString(*config, EraseLine)
-	writeString(*config, MoveToStartOfLine)
+	writeStringToProgress(*config, EraseLine)
+	writeStringToProgress(*config, MoveToStartOfLine)
 
-	fixedLines := strings.Split(fmt.Sprintf("%s%s", strProgressStats, strProgressBars), "\n")
+	lines := fmt.Sprintf("%s\n%s", strProgressStats, strProgressBars)
+	fixedLines := strings.Split(lines, "\n")
 	nlines = len(fixedLines)
 
 	for i, line := range fixedLines {
-		writeString(*config, line)
+		w, _ := termSize()
+		lineWidth := getStringWidth(&barConfig{colorCodes: true}, line, true)
+		if lineWidth > w {
+			line = runewidth.Truncate(line, w, "...")
+		}
+
+		writeStringToProgress(*config, line)
 		if i != nlines-1 {
-			writeString(*config, "\n")
+			writeStringToProgress(*config, "\n")
 		}
 	}
 }
