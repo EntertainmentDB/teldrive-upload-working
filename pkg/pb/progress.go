@@ -23,6 +23,8 @@ type progressState struct {
 	uploadedBytes        float64
 	existing             int
 	existingBytes        float64
+	error                int
+	errorBytes           float64
 	totalAverageRate     float64
 	totalTransfers       int
 	totalSize            int64
@@ -30,12 +32,22 @@ type progressState struct {
 	// error    int
 }
 
+type logWriter struct {
+	progress *Progress
+}
+
+func (lw *logWriter) Write(b []byte) (n int, err error) {
+	lw.progress.render(string(b))
+	return len(b), nil
+}
+
 type Progress struct {
-	Bars   []*Bar
-	lock   sync.Mutex
-	wg     *sync.WaitGroup
-	config progressConfig
-	state  progressState
+	Bars      []*Bar
+	LogWriter *logWriter
+	lock      sync.Mutex
+	wg        *sync.WaitGroup
+	config    progressConfig
+	state     progressState
 }
 
 func NewProgress(wg *sync.WaitGroup, options ...ProgressOption) *Progress {
@@ -43,6 +55,8 @@ func NewProgress(wg *sync.WaitGroup, options ...ProgressOption) *Progress {
 		writer:           configureOutputWriter(os.Stdout),
 		throttleDuration: 65 * time.Millisecond,
 	}}
+	p.LogWriter = &logWriter{progress: &p}
+
 	for _, o := range options {
 		o(&p)
 	}
@@ -51,6 +65,12 @@ func NewProgress(wg *sync.WaitGroup, options ...ProgressOption) *Progress {
 
 func (p *Progress) StartProgress() func() {
 	stopProgress := make(chan struct{})
+
+	// oldLogPrint := fs.LogPrint
+
+	// fs.LogPrint = func(level fs.LogLevel, text string) {
+	// 	p.render(text)
+	// }
 
 	var wg sync.WaitGroup
 	wg.Add(1)
@@ -61,11 +81,12 @@ func (p *Progress) StartProgress() func() {
 		for {
 			select {
 			case <-ticker.C:
-				if err := p.render(); err != nil {
+				if err := p.render(""); err != nil {
 					return
 				}
 			case <-stopProgress:
 				ticker.Stop()
+				// fs.LogPrint = oldLogPrint
 				fmt.Println("")
 				return
 			}
@@ -87,7 +108,7 @@ func (p *Progress) Wait() {
 	p.wg.Wait()
 }
 
-func (p *Progress) AddTransfer(totalFiles int, totalSize int64) {
+func (p *Progress) AddTransfers(totalFiles int, totalSize int64) {
 	p.lock.Lock()
 	defer p.lock.Unlock()
 	p.state.totalSize += totalSize
@@ -99,19 +120,25 @@ func (p *Progress) AddExisting(size float64) {
 	p.state.existingBytes += size
 	p.state.existing++
 }
+func (p *Progress) AddError(size float64) {
+	p.lock.Lock()
+	defer p.lock.Unlock()
+	p.state.errorBytes += size
+	p.state.error++
+}
 
 var (
 	nlines = 0 // number of lines in the previous stats block
 )
 
-func (p *Progress) render() error {
+func (p *Progress) render(logMessage string) error {
 	strProgressBars, err := generateProgressBars(p)
 	if err != nil {
 		return err
 	}
 	strProgressStats := generateProgressStats(p)
 
-	clearAndWriteProgress(&p.config, strProgressStats, strProgressBars)
+	clearAndWriteProgress(&p.config, strProgressStats, strProgressBars, logMessage)
 
 	return nil
 }
@@ -126,9 +153,9 @@ func OptionSetWriter(w io.Writer) ProgressOption {
 	}
 }
 
-// OptionThrottle will wait the specified duration before updating again. The default
-// duration is 0 seconds.
-func OptionThrottle(duration time.Duration) ProgressOption {
+// OptionSetThrottle will wait the specified duration before updating again. The default
+// duration is 65 milliseconds.
+func OptionSetThrottle(duration time.Duration) ProgressOption {
 	return func(p *Progress) {
 		p.config.throttleDuration = duration
 	}
@@ -183,6 +210,7 @@ func generateProgressBars(p *Progress) (string, error) {
 	p.state.totalAverageRate = 0
 	p.state.uploadedBytes = 0
 	p.state.maxDescriptionLength = 0
+	p.state.error = 0
 
 	for _, bar := range p.Bars {
 		if !bar.IsCompleted() {
@@ -201,6 +229,12 @@ func generateProgressBars(p *Progress) (string, error) {
 		strBar, err := bar.getBar()
 		if err != nil {
 			return "", err
+		}
+
+		if bar.IsError() {
+			p.state.error++
+			// p.state.errorBytes += float64(bar.config.max)
+			continue
 		}
 		p.state.uploadedBytes += bar.state.currentBytes
 
@@ -245,6 +279,13 @@ func generateProgressStats(p *Progress) string {
 	strProgressStats.WriteString(progressInfo)
 	strProgressStats.WriteString("\n")
 
+	errorInfo := ""
+	if p.state.error > 0 {
+		errorInfo = fmt.Sprintf("Errors: %d\n", p.state.error)
+	}
+
+	strProgressStats.WriteString(errorInfo)
+
 	strProgressStats.WriteString("Transferring:")
 
 	return strProgressStats.String()
@@ -264,13 +305,21 @@ func WriteToFile(path string, str string) error {
 	return nil
 }
 
-func clearAndWriteProgress(config *progressConfig, strProgressStats string, strProgressBars string) {
+func clearAndWriteProgress(config *progressConfig, strProgressStats string, strProgressBars string, logMessage string) {
+	if logMessage != "" {
+		writeStringToProgress(*config, "\n")
+		writeStringToProgress(*config, MoveUp)
+	}
 	for i := 0; i < nlines-1; i++ {
 		writeStringToProgress(*config, EraseLine)
 		writeStringToProgress(*config, MoveUp)
 	}
 	writeStringToProgress(*config, EraseLine)
 	writeStringToProgress(*config, MoveToStartOfLine)
+	if logMessage != "" {
+		writeStringToProgress(*config, EraseLine)
+		writeStringToProgress(*config, logMessage+"\n")
+	}
 
 	lines := fmt.Sprintf("%s\n%s", strProgressStats, strProgressBars)
 	fixedLines := strings.Split(lines, "\n")

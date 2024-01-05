@@ -51,16 +51,16 @@ func (b *Bar) Finish() error {
 }
 
 // Exit will exit the bar to keep current state
-func (b *Bar) Exit() error {
-	b.lock.Lock()
-	defer b.lock.Unlock()
+// func (b *Bar) Exit() error {
+// 	b.lock.Lock()
+// 	defer b.lock.Unlock()
 
-	b.state.exit = true
-	if b.config.onCompletion != nil {
-		b.config.onCompletion()
-	}
-	return nil
-}
+// 	b.state.exit = true
+// 	if b.config.onCompletion != nil {
+// 		b.config.onCompletion()
+// 	}
+// 	return nil
+// }
 
 // IncrInt will add the specified amount to the progressbar
 func (b *Bar) IncrInt(num int) error {
@@ -199,6 +199,11 @@ func (b *Bar) IsCompleted() bool {
 	return b.state.completed
 }
 
+// IsError returns true if progress bar is errored
+func (b *Bar) IsError() bool {
+	return b.state.exit
+}
+
 // getBar renders the progress bar, updating the maximum
 // rendered line width. this function is not thread-safe,
 // so it must be called with an acquired lock.
@@ -218,7 +223,7 @@ func (b *Bar) getBar() (string, error) {
 	// 	}
 	// }
 
-	if b.IsCompleted() && b.state.currentNum < b.config.max {
+	if b.IsCompleted() && b.state.exit {
 		b.state.error = true
 		return "", nil
 	}
@@ -277,23 +282,47 @@ func (b *Bar) State() BarState {
 // Write implement io.Writer
 func (b *Bar) Write(byte []byte) (n int, err error) {
 	n = len(byte)
-	b.IncrInt(n)
-	return
+	return n, b.IncrInt(n)
 }
 
 // Read implement io.Reader
 func (b *Bar) Read(byte []byte) (n int, err error) {
 	n = len(byte)
-	b.IncrInt(n)
-	return
+	return n, b.IncrInt(n)
+}
+
+type proxyReader struct {
+	io.Reader
+	Reporter func(r int64)
+}
+
+func (pr *proxyReader) Read(b []byte) (n int, err error) {
+	n, err = pr.Reader.Read(b)
+	pr.Reporter(int64(n))
+	return n, err
+}
+
+func (b *Bar) ProxyReader(f io.Reader) *proxyReader {
+	return &proxyReader{f, func(r int64) {
+		b.IncrInt64(r)
+	}}
 }
 
 // Close close the bar forever
-func (b *Bar) Close() (err error) {
+func (b *Bar) Close() {
 	b.lock.Lock()
 	b.state.completed = true
 	b.lock.Unlock()
-	return
+}
+
+func (b *Bar) Abort() {
+	b.lock.Lock()
+	defer b.lock.Unlock()
+
+	b.state.exit = true
+	if b.config.onCompletion != nil {
+		b.config.onCompletion()
+	}
 }
 
 // Reader is the progressbar io.Reader struct

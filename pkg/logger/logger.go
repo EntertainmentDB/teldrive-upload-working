@@ -1,7 +1,9 @@
 package logger
 
 import (
+	"io"
 	"time"
+	"uploader/config"
 	"uploader/pkg/pb"
 
 	"go.uber.org/zap"
@@ -19,28 +21,25 @@ type ProgressWriterAdapter struct {
 // 	return len(p), nil
 // }
 
-func InitLogger() *zap.Logger {
+func InitLogger(options ...LoggerOption) *zap.Logger {
 	customTimeEncoder := func(t time.Time, enc zapcore.PrimitiveArrayEncoder) {
-		enc.AppendString(t.Format("02/01/2006 03:04 PM"))
+		enc.AppendString(t.Format("02/01/2006 03:04:00.000 PM"))
 	}
 	var (
 		consoleConfig zapcore.EncoderConfig
-		// logLevel      zapcore.Level
+		logLevel      zapcore.Level
 	)
 
-	dev := false
-
-	if dev {
+	if config.GetConfig().Debug {
 		consoleConfig = zap.NewDevelopmentEncoderConfig()
-		// logLevel = zap.DebugLevel
+		logLevel = zap.DebugLevel
 	} else {
-
 		consoleConfig = zap.NewProductionEncoderConfig()
-		// logLevel = zap.InfoLevel
+		logLevel = zap.InfoLevel
 	}
 	consoleConfig.EncodeLevel = zapcore.CapitalColorLevelEncoder
 	consoleConfig.EncodeTime = customTimeEncoder
-	// consoleEncoder := zapcore.NewConsoleEncoder(consoleConfig)
+	consoleEncoder := zapcore.NewConsoleEncoder(consoleConfig)
 
 	fileEncoderConfig := zap.NewProductionEncoderConfig()
 	fileEncoderConfig.EncodeTime = zapcore.ISO8601TimeEncoder
@@ -54,11 +53,29 @@ func InitLogger() *zap.Logger {
 		Compress:   true,
 	})
 
+	var writers []zapcore.Core
+
+	for _, o := range options {
+		w := o()
+		consoleZapCore := zapcore.NewCore(consoleEncoder, zapcore.AddSync(w), logLevel)
+		writers = append(writers, consoleZapCore)
+	}
+
+	fileZapCore := zapcore.NewCore(fileEncoder, fileWriter, logLevel)
+	writers = append(writers, fileZapCore)
+
 	core := zapcore.NewTee(
-		// zapcore.NewCore(consoleEncoder, zapcore.AddSync(os.Stdout), logLevel),
-		zapcore.NewCore(fileEncoder, fileWriter, zapcore.DebugLevel),
-		// zapcore.NewCore(zapcore.NewConsoleEncoder(consoleConfig), zapcore.AddSync(progressWriterAdapter), logLevel),
+		writers...,
+	// zapcore.NewCore(consoleEncoder, zapcore.AddSync(os.Stdout), logLevel),
 	)
 
 	return zap.New(core, zap.AddStacktrace(zapcore.FatalLevel))
+}
+
+type LoggerOption func() io.Writer
+
+func AddCustomWriter(w io.Writer) LoggerOption {
+	return func() io.Writer {
+		return w
+	}
 }

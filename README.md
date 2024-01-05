@@ -17,6 +17,8 @@ TRANSFERS=4 # Number of files to upload simultaneously (default is 4)
 RANDOMISE_PART=true # Set random name to uploaded file (default is true)
 ENCRYPT_FILES=false # Encrypt your files using Teldrive encryption (default is false)
 DELETE_AFTER_UPLOAD=false # Delete each file immediately after a successful upload (default is false)
+DEBUG=false # Enable debug mode to troubleshoot errors (default is false)
+# Same logs are saved to logs/uploader.log by default
 ```
 2. Smaller part sizes result in faster upload speeds.
 3. Download the release binary of Teldrive Upload from the releases section.

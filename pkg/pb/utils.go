@@ -6,7 +6,11 @@ import (
 )
 
 func calculatePercent(current int, max int) int {
-	return int((float64(current) / float64(max)) * 100)
+	percent := int((float64(current) / float64(max)) * 100)
+	if percent < 0 {
+		percent = 0
+	}
+	return percent
 }
 
 func average(xs []float64) float64 {

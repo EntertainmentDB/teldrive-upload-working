@@ -34,17 +34,6 @@ var retryErrorCodes = []int{
 	509, // Bandwidth Limit Exceeded
 }
 
-type ProgressReader struct {
-	io.Reader
-	Reporter func(r int64)
-}
-
-func (pr *ProgressReader) Read(p []byte) (n int, err error) {
-	n, err = pr.Reader.Read(p)
-	pr.Reporter(int64(n))
-	return
-}
-
 type UploadService struct {
 	http              *rest.Client
 	numWorkers        int
@@ -86,7 +75,7 @@ func shouldRetry(ctx context.Context, resp *http.Response, err error) (bool, err
 	return fserrors.ShouldRetry(err) || fserrors.ShouldRetryHTTP(resp, retryErrorCodes), err
 }
 
-func (u *UploadService) checkFileExists(fileName string, path string) bool {
+func (u *UploadService) checkFileExists(fileName string, path string) (bool, error) {
 	opts := rest.Opts{
 		Method: "GET",
 		Path:   "/api/files",
@@ -105,16 +94,20 @@ func (u *UploadService) checkFileExists(fileName string, path string) bool {
 		resp, err = u.http.CallJSON(u.ctx, &opts, nil, &info)
 		return shouldRetry(u.ctx, resp, err)
 	})
-	if resp.StatusCode != 404 && err == nil && len(info.Files) > 0 {
-		return true
+	if err != nil {
+		return false, err
+	}
+	if resp != nil && resp.StatusCode != 404 && len(info.Files) > 0 {
+		return true, nil
 	}
 
-	return false
+	return false, nil
 }
 
 func (u *UploadService) UploadFile(filePath string, destDir string) error {
 	file, err := os.Open(filePath)
 	if err != nil {
+		u.logger.Fatal("open file failed", zap.String("filePath", filePath), zap.Error(err))
 		return err
 	}
 	defer file.Close()
@@ -122,8 +115,8 @@ func (u *UploadService) UploadFile(filePath string, destDir string) error {
 	buffer := make([]byte, 512)
 	_, err = file.Read(buffer)
 	if err != nil {
-		u.logger.Error("error reading file:", zap.String("filePath", filePath), zap.Error(err))
-		return nil
+		u.logger.Fatal("read file failed", zap.String("filePath", filePath), zap.Error(err))
+		return err
 	}
 
 	mimeType := http.DetectContentType(buffer)
@@ -132,7 +125,34 @@ func (u *UploadService) UploadFile(filePath string, destDir string) error {
 	fileSize := fileInfo.Size()
 	fileName := filepath.Base(filePath)
 
-	if u.checkFileExists(fileName, destDir) {
+	bar := pb.NewOptions64(fileSize,
+		pb.OptionShowCount(),
+		pb.OptionEnableColorCodes(true),
+		pb.OptionShowBytes(true),
+		pb.OptionSetWidth(10),
+		pb.OptionSetDescription(fileName),
+		pb.OptionSetTheme(pb.Theme{
+			Saucer:        "[green]=[reset]",
+			SaucerHead:    "[green]>[reset]",
+			SaucerPadding: " ",
+			BarStart:      "[",
+			BarEnd:        "]",
+		}),
+		pb.OptionFullWidth(),
+		pb.OptionSetRenderBlankState(true))
+
+	defer bar.Close()
+
+	u.Progress.AddBar(bar)
+
+	exists, err := u.checkFileExists(fileName, destDir)
+	if err != nil {
+		bar.Abort()
+		u.logger.Error("check file exists failed", zap.String("fileName", fileName), zap.String("destDir", destDir), zap.Error(err))
+		return err
+	}
+	if exists {
+		u.Progress.AddExisting(float64(fileSize))
 		u.logger.Info("file exists", zap.String("fileName", fileName))
 		return nil
 	}
@@ -185,38 +205,7 @@ func (u *UploadService) UploadFile(filePath string, destDir string) error {
 		encryptFile = uploadFile.Parts[0].Encrypted
 	}
 
-	// shortenedName := func(name string) string {
-	// 	const maxFileNameLength = 75
-
-	// 	if len(fileName) > maxFileNameLength {
-	// 		half := maxFileNameLength / 2
-	// 		return fileName[:half-2] + "..." + fileName[len(fileName)-half+1:]
-	// 	}
-	// 	return fileName
-	// }(fileName)
-
-	bar := pb.NewOptions64(fileSize,
-		pb.OptionShowCount(),
-		// pb.OptionSetWriter(os.Stderr),
-		pb.OptionEnableColorCodes(true),
-		pb.OptionShowBytes(true),
-		pb.OptionSetWidth(10),
-		pb.OptionSetDescription(fileName),
-		pb.OptionSetTheme(pb.Theme{
-			Saucer:        "[green]=[reset]",
-			SaucerHead:    "[green]>[reset]",
-			SaucerPadding: " ",
-			BarStart:      "[",
-			BarEnd:        "]",
-		}),
-		pb.OptionFullWidth(),
-		pb.OptionSetRenderBlankState(true))
-
-	defer bar.Close()
-
-	u.Progress.AddBar(bar)
-
-	// var barw *mpb.Bar
+	// var bars *mpb.Bar
 	// barOptions := []mpb.BarOption{
 	// 	mpb.PrependDecorators(
 	// 		decor.Name("shortenedName", decor.WC{C: decor.DSyncWidthR | decor.DextraSpace}),
@@ -270,7 +259,7 @@ func (u *UploadService) UploadFile(filePath string, destDir string) error {
 
 			file, err := os.Open(filePath)
 			if err != nil {
-				u.logger.Error("Error:", zap.Error(err))
+				u.logger.Error("open file failed", zap.String("filePath", filePath), zap.Error(err))
 				return
 			}
 			defer file.Close()
@@ -283,15 +272,11 @@ func (u *UploadService) UploadFile(filePath string, destDir string) error {
 			_, err = file.Seek(start, io.SeekStart)
 
 			if err != nil {
-				u.logger.Error("Error:", zap.Error(err))
+				u.logger.Error("seek file failed", zap.String("filePath", filePath), zap.Error(err))
 				return
 			}
 
-			pr := &ProgressReader{file, func(r int64) {
-				bar.IncrInt64(r)
-			}}
-			// pr := bar.ProxyReader(file)
-			// defer pr.Close()
+			pr := bar.ProxyReader(file)
 
 			contentLength := end - start
 			reader := io.LimitReader(pr, contentLength)
@@ -321,11 +306,12 @@ func (u *UploadService) UploadFile(filePath string, destDir string) error {
 			resp, err := u.http.CallJSON(context.TODO(), &opts, nil, &partFile)
 
 			if err != nil {
-				u.logger.Error("Error:", zap.Error(err))
+				u.logger.Error("send part file failed", zap.String("filePath", filePath), zap.Error(err))
 				return
 			}
 			if resp.StatusCode == 201 {
 				uploadedParts <- partFile
+				u.logger.Debug("part file sent", zap.String("fileName", fileName), zap.String("partName", partName), zap.Int64("partNumber", partNumber+1), zap.Int64("size", partFile.Size))
 			}
 		}(i, start, end)
 	}
@@ -338,9 +324,9 @@ func (u *UploadService) UploadFile(filePath string, destDir string) error {
 	}
 
 	if len(parts) != int(totalParts) {
-		// bar.Abort(true)
-		// bar.Wait()
-		return fmt.Errorf("upload failed: %s", fileName)
+		bar.Abort()
+		u.logger.Error("uploaded parts incomplete", zap.String("fileName", fileName), zap.Int("uploadedParts", len(parts)), zap.Int64("totalParts", totalParts))
+		return err
 	}
 	// bar.Wait()
 
@@ -387,6 +373,8 @@ func (u *UploadService) UploadFile(filePath string, destDir string) error {
 	if err != nil {
 		return err
 	}
+
+	u.logger.Info("file sent", zap.String("fileName", fileName), zap.Int64("fileSize", fileSize))
 
 	return nil
 }
@@ -438,7 +426,7 @@ func (u *UploadService) readMetaDataForPath(path string, options *types.Metadata
 		return shouldRetry(u.ctx, resp, err)
 	})
 
-	if err != nil && resp.StatusCode == 404 {
+	if err != nil && resp != nil && resp.StatusCode == 404 {
 		return nil, fs.ErrorDirNotFound
 	}
 
@@ -486,13 +474,15 @@ func (u *UploadService) checkFileExistsInDirectory(name string, files []types.Fi
 func (u *UploadService) UploadFilesInDirectory(sourcePath string, destDir string) error {
 	entries, err := os.ReadDir(sourcePath)
 	if err != nil {
-		u.logger.Fatal("read file failed", zap.Error(err))
+		u.logger.Error("read file failed", zap.String("sourcePath", sourcePath), zap.Error(err))
+		return err
 	}
 
 	destDir = strings.ReplaceAll(destDir, "\\", "/")
 
 	filesInRemote, err := u.list(destDir)
 	if err != nil {
+		u.logger.Error("list remote files failed", zap.String("destDir", destDir), zap.Error(err))
 		return err
 	}
 
@@ -504,11 +494,13 @@ func (u *UploadService) UploadFilesInDirectory(sourcePath string, destDir string
 			subDir = strings.ReplaceAll(subDir, "\\", "/")
 			err := u.CreateRemoteDir(subDir)
 			if err != nil {
-				u.logger.Fatal("create remote failed", zap.Error(err))
+				u.logger.Error("create remote dir failed", zap.String("subDir", subDir), zap.Error(err))
+				continue
 			}
 			err = u.UploadFilesInDirectory(fullPath, subDir)
 			if err != nil {
-				u.logger.Fatal("upload files in directory failed", zap.Error(err))
+				u.logger.Error("upload files in directory failed", zap.String("fullPath", fullPath), zap.String("subDir", subDir), zap.Error(err))
+				continue
 			}
 		} else {
 			exists := u.checkFileExistsInDirectory(entry.Name(), filesInRemote)
@@ -524,25 +516,27 @@ func (u *UploadService) UploadFilesInDirectory(sourcePath string, destDir string
 
 					err := u.UploadFile(fullPath, destDir)
 					if err != nil {
-						u.logger.Error("upload failed:", zap.Error(err))
+						u.logger.Error("upload failed", zap.String("fullPath", fullPath), zap.Error(err))
 						return
 					}
 
 					if u.deleteAfterUpload {
 						err = os.Remove(fullPath)
 						if err != nil {
-							u.logger.Error("error deleting file \"%s\" %s", zap.String("fullPaths", fullPath), zap.Error(err))
+							u.logger.Error("delete file failed", zap.String("fullPath", fullPath), zap.Error(err))
 							return
 						}
-						// Info.Println("deleted file:", fullPath)
+						u.logger.Info("deleted file", zap.String("fullPath", fullPath))
 					}
 				}(entry)
 			} else {
 				fileInfo, err := os.Stat(fullPath)
-				if err == nil {
-					u.Progress.AddExisting(float64(fileInfo.Size()))
+				if err != nil {
+					u.logger.Error("stat for existing file failed", zap.String("fullPath", fullPath), zap.Error(err))
+					return err
 				}
-				u.logger.Info("file exists:", zap.String("fileName", entry.Name()))
+				u.Progress.AddExisting(float64(fileInfo.Size()))
+				u.logger.Info("file in directory exists", zap.String("fullPath", fullPath))
 			}
 		}
 	}
