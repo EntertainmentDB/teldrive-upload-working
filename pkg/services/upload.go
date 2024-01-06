@@ -310,6 +310,13 @@ func (u *UploadService) UploadFile(filePath string, destDir string) error {
 				return
 			}
 			if resp.StatusCode == 201 {
+				part, ok := <-uploadedParts
+				if !ok {
+					u.logger.Error("uploaded parts channel closed", zap.String("fileName", fileName), zap.String("partName", partName), zap.Int64("partNumber", partNumber+1), zap.Int64("size", partFile.Size), zap.Error(err))
+					return
+				}
+				sendPart := part
+				uploadedParts <- sendPart
 				uploadedParts <- partFile
 				u.logger.Debug("part file sent", zap.String("fileName", fileName), zap.String("partName", partName), zap.Int64("partNumber", partNumber+1), zap.Int64("size", partFile.Size))
 			}
