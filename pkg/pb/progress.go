@@ -259,12 +259,12 @@ func generateProgressBars(p *Progress) (string, error) {
 func generateProgressStats(p *Progress) string {
 	var strProgressStats strings.Builder
 
-	uploadedBytesHumanize, uploadedBytesSuffix := humanizeBytes(float64(p.state.uploadedBytes)+p.state.existingBytes, false)
+	uploadedBytesHumanize, uploadedBytesSuffix := humanizeBytes(p.state.uploadedBytes+p.state.existingBytes, false)
 	totalSizeHumanize, totalSizeSuffix := humanizeBytes(float64(p.state.totalSize), false)
 	speedHumanize, speedSuffix := humanizeBytes(p.state.totalAverageRate, false)
 
 	transferredInfo := fmt.Sprintf("Transferred: %s, %s",
-		fmt.Sprintf("%s%s/%s%s, %d%%", uploadedBytesHumanize, uploadedBytesSuffix, totalSizeHumanize, totalSizeSuffix, calculatePercent(int(p.state.uploadedBytes), int(p.state.totalSize))),
+		fmt.Sprintf("%s%s/%s%s, %d%%", uploadedBytesHumanize, uploadedBytesSuffix, totalSizeHumanize, totalSizeSuffix, calculatePercent(int(p.state.uploadedBytes+p.state.existingBytes), int(p.state.totalSize))),
 		fmt.Sprintf("%s%s/s", speedHumanize, speedSuffix),
 	)
 	strProgressStats.WriteString(transferredInfo)
@@ -272,7 +272,7 @@ func generateProgressStats(p *Progress) string {
 
 	progressInfo := ""
 	if p.state.totalTransfers != 0 {
-		progressInfo = fmt.Sprintf("Transferred: %d/%d, %d%%", p.state.uploaded+p.state.existing, p.state.totalTransfers, calculatePercent(p.state.uploaded, p.state.totalTransfers))
+		progressInfo = fmt.Sprintf("Transferred: %d/%d, %d%%", p.state.uploaded+p.state.existing, p.state.totalTransfers, calculatePercent(p.state.uploaded+p.state.existing, p.state.totalTransfers))
 	} else {
 		progressInfo = fmt.Sprintf("Transferred: %d/%d, %d%%", p.state.uploaded, p.state.totalTransfers, 0)
 	}
