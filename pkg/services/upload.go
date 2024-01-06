@@ -326,7 +326,7 @@ func (u *UploadService) UploadFile(filePath string, destDir string) error {
 	if len(parts) != int(totalParts) {
 		bar.Abort()
 		u.logger.Error("uploaded parts incomplete", zap.String("fileName", fileName), zap.Int("uploadedParts", len(parts)), zap.Int64("totalParts", totalParts))
-		return err
+		return fmt.Errorf("uploaded parts incomplete")
 	}
 	// bar.Wait()
 
