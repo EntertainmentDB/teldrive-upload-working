@@ -1,6 +1,7 @@
 package pb
 
 import (
+	"bytes"
 	"fmt"
 	"io"
 	"os"
@@ -291,34 +292,24 @@ func generateProgressStats(p *Progress) string {
 	return strProgressStats.String()
 }
 
-func WriteToFile(path string, str string) error {
-	file, err := os.Create(path)
-	if err != nil {
-		return err
-	}
-	defer file.Close()
-
-	_, err = fmt.Fprintln(file, str)
-	if err != nil {
-		return err
-	}
-	return nil
-}
-
 func clearAndWriteProgress(config *progressConfig, strProgressStats string, strProgressBars string, logMessage string) {
+	var buf bytes.Buffer
+	out := func(s string) {
+		buf.WriteString(s)
+	}
 	if logMessage != "" {
-		writeStringToProgress(*config, "\n")
-		writeStringToProgress(*config, MoveUp)
+		out("\n")
+		out(MoveUp)
 	}
 	for i := 0; i < nlines-1; i++ {
-		writeStringToProgress(*config, EraseLine)
-		writeStringToProgress(*config, MoveUp)
+		out(EraseLine)
+		out(MoveUp)
 	}
-	writeStringToProgress(*config, EraseLine)
-	writeStringToProgress(*config, MoveToStartOfLine)
+	out(EraseLine)
+	out(MoveToStartOfLine)
 	if logMessage != "" {
-		writeStringToProgress(*config, EraseLine)
-		writeStringToProgress(*config, logMessage+"\n")
+		out(EraseLine)
+		out(logMessage + "\n")
 	}
 
 	lines := fmt.Sprintf("%s\n%s", strProgressStats, strProgressBars)
@@ -332,11 +323,12 @@ func clearAndWriteProgress(config *progressConfig, strProgressStats string, strP
 			line = runewidth.Truncate(line, w, "...")
 		}
 
-		writeStringToProgress(*config, line)
+		out(line)
 		if i != nlines-1 {
-			writeStringToProgress(*config, "\n")
+			out("\n")
 		}
 	}
+	writeToProgress(*config, buf.Bytes())
 }
 
 // func clearProgressBars(config progressConfig, lines int) {

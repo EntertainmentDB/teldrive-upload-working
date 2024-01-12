@@ -3,6 +3,7 @@ package pb
 import (
 	"fmt"
 	"math"
+	"os"
 )
 
 func calculatePercent(current int, max int) int {
@@ -46,4 +47,18 @@ func humanizeBytes(s float64, iec bool) (string, string) {
 	}
 
 	return fmt.Sprintf(f, val), suffix
+}
+
+func WriteToFile(path string, str string) error {
+	file, err := os.Create(path)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	_, err = fmt.Fprintln(file, str)
+	if err != nil {
+		return err
+	}
+	return nil
 }

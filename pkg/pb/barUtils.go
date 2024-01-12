@@ -2,7 +2,6 @@ package pb
 
 import (
 	"fmt"
-	"io"
 	"math"
 	"os"
 	"regexp"
@@ -755,10 +754,13 @@ func getBarString(c *barConfig, s *barState) (int, string, error) {
 	return getStringWidth(c, str, false), str, nil
 }
 
-func writeStringToProgress(c progressConfig, str string) error {
-	if _, err := io.WriteString(c.writer, str); err != nil {
+func writeToProgress(c progressConfig, out []byte) error {
+	if _, err := c.writer.Write(out); err != nil {
 		return err
 	}
+	// if _, err := io.WriteString(c.writer, str); err != nil {
+	// 	return err
+	// }
 
 	if f, ok := c.writer.(*os.File); ok {
 		// ignore any errors in Sync(), as stdout
