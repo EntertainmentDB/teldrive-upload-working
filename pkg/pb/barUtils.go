@@ -41,7 +41,7 @@ type barState struct {
 	averageRate         float64
 
 	maxLineWidth int
-	currentBytes float64
+	currentBytes int64
 
 	completed bool
 	finished  bool
@@ -477,7 +477,7 @@ func getBarString(c *barConfig, s *barState) (int, string, error) {
 		// if no average samples, or if finished,
 		// then average rate should be the total rate
 		if t := time.Since(s.startTime).Seconds(); t > 0 {
-			s.averageRate = s.currentBytes / t
+			s.averageRate = float64(s.currentBytes) / t
 		} else {
 			s.averageRate = 0
 		}
@@ -492,7 +492,7 @@ func getBarString(c *barConfig, s *barState) (int, string, error) {
 		}
 		if !c.ignoreLength {
 			if c.showBytes {
-				currentHumanize, currentSuffix := humanizeBytes(s.currentBytes, c.useIECUnits)
+				currentHumanize, currentSuffix := humanizeBytes(float64(s.currentBytes), c.useIECUnits)
 				if currentSuffix == c.maxHumanizedSuffix {
 					sb.WriteString(fmt.Sprintf("%s/%s%s",
 						currentHumanize, c.maxHumanized, c.maxHumanizedSuffix))
@@ -501,14 +501,14 @@ func getBarString(c *barConfig, s *barState) (int, string, error) {
 						currentHumanize, currentSuffix, c.maxHumanized, c.maxHumanizedSuffix))
 				}
 			} else {
-				sb.WriteString(fmt.Sprintf("%.0f/%d", s.currentBytes, c.max))
+				sb.WriteString(fmt.Sprintf("%d/%d", s.currentBytes, c.max))
 			}
 		} else {
 			if c.showBytes {
-				currentHumanize, currentSuffix := humanizeBytes(s.currentBytes, c.useIECUnits)
+				currentHumanize, currentSuffix := humanizeBytes(float64(s.currentBytes), c.useIECUnits)
 				sb.WriteString(fmt.Sprintf("%s%s", currentHumanize, currentSuffix))
 			} else {
-				sb.WriteString(fmt.Sprintf("%.0f/%s", s.currentBytes, "-"))
+				sb.WriteString(fmt.Sprintf("%d/%s", s.currentBytes, "-"))
 			}
 		}
 	}

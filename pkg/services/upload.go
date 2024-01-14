@@ -152,7 +152,7 @@ func (u *UploadService) UploadFile(filePath string, destDir string) error {
 		return err
 	}
 	if exists {
-		u.Progress.AddExisting(float64(fileSize))
+		u.Progress.AddExisting(fileSize)
 		u.logger.Info("file exists", zap.String("fileName", fileName))
 		return nil
 	}
@@ -311,7 +311,7 @@ func (u *UploadService) UploadFile(filePath string, destDir string) error {
 			}
 			if resp.StatusCode == 201 {
 				uploadedParts <- partFile
-				u.logger.Debug("part file sent", zap.String("fileName", fileName), zap.String("partName", partName), zap.Int64("partNumber", partNumber+1), zap.Int64("totalParts", totalParts), zap.Int64("size", partFile.Size))
+				u.logger.Debug("part file sent", zap.String("fileName", fileName), zap.String("partName", partName), zap.Int64("partNumber", partNumber+1), zap.Int64("totalParts", totalParts), zap.Int64("size", partFile.Size), zap.Int("partId", partFile.PartId))
 			}
 		}(i, start, end)
 	}
@@ -535,7 +535,7 @@ func (u *UploadService) UploadFilesInDirectory(sourcePath string, destDir string
 					u.logger.Error("stat for existing file failed", zap.String("fullPath", fullPath), zap.Error(err))
 					return err
 				}
-				u.Progress.AddExisting(float64(fileInfo.Size()))
+				u.Progress.AddExisting(fileInfo.Size())
 				u.logger.Info("file in directory exists", zap.String("fullPath", fullPath))
 			}
 		}

@@ -12,7 +12,7 @@ import (
 type Bar struct {
 	state  barState
 	config barConfig
-	lock   sync.Mutex
+	mu     sync.Mutex
 }
 
 // String returns the current rendered version of the progress bar.
@@ -36,31 +36,19 @@ func (b *Bar) RenderBlank() error {
 // Reset will reset the clock that is used
 // to calculate current time and the time left.
 func (b *Bar) Reset() {
-	b.lock.Lock()
-	defer b.lock.Unlock()
+	b.mu.Lock()
+	defer b.mu.Unlock()
 
 	b.state = getBasicState()
 }
 
 // Finish will fill the bar to full
 func (b *Bar) Finish() error {
-	b.lock.Lock()
+	b.mu.Lock()
 	b.state.currentNum = b.config.max
-	b.lock.Unlock()
+	b.mu.Unlock()
 	return b.IncrInt(0)
 }
-
-// Exit will exit the bar to keep current state
-// func (b *Bar) Exit() error {
-// 	b.lock.Lock()
-// 	defer b.lock.Unlock()
-
-// 	b.state.exit = true
-// 	if b.config.onCompletion != nil {
-// 		b.config.onCompletion()
-// 	}
-// 	return nil
-// }
 
 // IncrInt will add the specified amount to the progressbar
 func (b *Bar) IncrInt(num int) error {
@@ -74,9 +62,9 @@ func (b *Bar) Set(num int) error {
 
 // Set64 will set the bar to a current number
 func (b *Bar) Set64(num int64) error {
-	b.lock.Lock()
+	b.mu.Lock()
 	toAdd := num - int64(b.state.currentBytes)
-	b.lock.Unlock()
+	b.mu.Unlock()
 	return b.IncrInt64(toAdd)
 }
 
@@ -85,8 +73,8 @@ func (b *Bar) IncrInt64(num int64) error {
 	if b.config.invisible {
 		return nil
 	}
-	b.lock.Lock()
-	defer b.lock.Unlock()
+	b.mu.Lock()
+	defer b.mu.Unlock()
 
 	if b.state.exit {
 		return nil
@@ -109,7 +97,7 @@ func (b *Bar) IncrInt64(num int64) error {
 		}
 	}
 
-	b.state.currentBytes += float64(num)
+	b.state.currentBytes += num
 
 	// reset the countdown timer every second to take rolling average
 	b.state.counterNumSinceLast += num
@@ -131,30 +119,19 @@ func (b *Bar) IncrInt64(num int64) error {
 		return errors.New("current number exceeds max")
 	}
 
-	// updateBar := b.state.currentPercent != b.state.lastPercent && b.state.currentPercent > 0
-	// // always update if show bytes/second or its/second
-	// if updateBar || b.config.showIterationsPerSecond || b.config.showIterationsCount {
-	// 	return b.render()
-	// }
-
 	return nil
 }
-
-// Clear erases the progress bar from the current line
-// func (b *Bar) Clear() error {
-// 	return clearProgressBar(b.config, b.state)
-// }
 
 // Describe will change the description shown before the progress, which
 // can be changed on the fly (as for a slow running process).
 func (b *Bar) Describe(description string) {
-	b.lock.Lock()
-	defer b.lock.Unlock()
+	b.mu.Lock()
+	defer b.mu.Unlock()
 	b.state.description = description
-	if b.config.invisible {
-		return
-	}
-	b.getBar()
+	// if b.config.invisible {
+	// 	return
+	// }
+	// b.getBar()
 }
 
 // GetMax returns the max of a bar
@@ -208,22 +185,7 @@ func (b *Bar) IsError() bool {
 // rendered line width. this function is not thread-safe,
 // so it must be called with an acquired lock.
 func (b *Bar) getBar() (string, error) {
-	// make sure that the rendering is not happening too quickly
-	// but always show if the currentNum reaches the max
-	if time.Since(b.state.lastShown).Nanoseconds() < b.config.throttleDuration.Nanoseconds() &&
-		b.state.currentNum < b.config.max {
-		return "", nil
-	}
-
-	// if !b.config.useANSICodes {
-	// 	// first, clear the existing progress bar
-	// 	err := clearProgressBar(b.config, b.state)
-	// 	if err != nil {
-	// 		return "", err
-	// 	}
-	// }
-
-	if b.IsCompleted() && b.state.exit {
+	if !b.state.error && b.state.exit {
 		b.state.error = true
 		return "", nil
 	}
@@ -239,13 +201,6 @@ func (b *Bar) getBar() (string, error) {
 		}
 	}
 	if b.IsCompleted() {
-		// when using ANSI codes we don't pre-clean the current line
-		// if b.config.useANSICodes && b.config.clearOnFinish {
-		// 	err := clearProgressBar(b.config, b.state)
-		// 	if err != nil {
-		// 		return "", err
-		// 	}
-		// }
 		return "", nil
 	}
 
@@ -266,11 +221,11 @@ func (b *Bar) getBar() (string, error) {
 
 // State returns the current state
 func (b *Bar) State() BarState {
-	b.lock.Lock()
-	defer b.lock.Unlock()
+	b.mu.Lock()
+	defer b.mu.Unlock()
 	s := BarState{}
 	s.CurrentPercent = float64(b.state.currentNum) / float64(b.config.max)
-	s.CurrentBytes = b.state.currentBytes
+	s.CurrentBytes = float64(b.state.currentBytes)
 	s.SecondsSince = time.Since(b.state.startTime).Seconds()
 	if b.state.currentNum > 0 {
 		s.SecondsLeft = s.SecondsSince / float64(b.state.currentNum) * (float64(b.config.max) - float64(b.state.currentNum))
@@ -310,16 +265,15 @@ func (b *Bar) ProxyReader(f io.Reader) *proxyReader {
 
 // Close close the bar forever
 func (b *Bar) Close() {
-	b.lock.Lock()
+	b.mu.Lock()
+	defer b.mu.Unlock()
 	b.state.completed = true
-	b.lock.Unlock()
 }
 
 func (b *Bar) Abort() {
-	b.lock.Lock()
-	defer b.lock.Unlock()
-
+	b.mu.Lock()
 	b.state.exit = true
+	b.mu.Unlock()
 	if b.config.onCompletion != nil {
 		b.config.onCompletion()
 	}

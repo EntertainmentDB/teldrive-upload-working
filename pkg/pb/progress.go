@@ -20,12 +20,14 @@ type progressConfig struct {
 }
 
 type progressState struct {
+	mu                   sync.Mutex
+	progress             *Progress
 	uploaded             int
-	uploadedBytes        float64
+	uploadedBytes        int64
 	existing             int
-	existingBytes        float64
+	existingBytes        int64
 	error                int
-	errorBytes           float64
+	errorBytes           int64
 	totalAverageRate     float64
 	totalTransfers       int
 	totalSize            int64
@@ -45,7 +47,6 @@ func (lw *logWriter) Write(b []byte) (n int, err error) {
 type Progress struct {
 	Bars      []*Bar
 	LogWriter *logWriter
-	lock      sync.Mutex
 	wg        *sync.WaitGroup
 	config    progressConfig
 	state     progressState
@@ -57,6 +58,7 @@ func NewProgress(wg *sync.WaitGroup, options ...ProgressOption) *Progress {
 		throttleDuration: 65 * time.Millisecond,
 	}}
 	p.LogWriter = &logWriter{progress: &p}
+	p.state.progress = &p
 
 	for _, o := range options {
 		o(&p)
@@ -109,23 +111,52 @@ func (p *Progress) Wait() {
 	p.wg.Wait()
 }
 
-func (p *Progress) AddTransfers(totalFiles int, totalSize int64) {
-	p.lock.Lock()
-	defer p.lock.Unlock()
+func (p *Progress) updateMaxDescriptionLength() {
+	p.state.mu.Lock()
+	defer p.state.mu.Unlock()
+	p.state.maxDescriptionLength = 0
+	for _, bar := range p.Bars {
+		if !bar.IsCompleted() {
+			sw := getStringWidth(&bar.config, bar.state.originalDescription, false)
+			if sw > p.state.maxDescriptionLength {
+				p.state.maxDescriptionLength = sw
+			}
+		}
+	}
+}
+
+func (p *Progress) AddTransfer(totalFiles int, totalSize int64) {
+	p.state.mu.Lock()
+	defer p.state.mu.Unlock()
 	p.state.totalSize += totalSize
 	p.state.totalTransfers += totalFiles
 }
-func (p *Progress) AddExisting(size float64) {
-	p.lock.Lock()
-	defer p.lock.Unlock()
+func (p *Progress) AddExisting(size int64) {
+	p.state.mu.Lock()
+	defer p.state.mu.Unlock()
 	p.state.existingBytes += size
 	p.state.existing++
 }
-func (p *Progress) AddError(size float64) {
-	p.lock.Lock()
-	defer p.lock.Unlock()
+func (p *Progress) addError(size int64) {
+	p.state.mu.Lock()
+	defer p.state.mu.Unlock()
 	p.state.errorBytes += size
 	p.state.error++
+}
+func (p *Progress) addUploaded() {
+	p.state.mu.Lock()
+	defer p.state.mu.Unlock()
+	p.state.uploaded++
+}
+func (p *Progress) incrUploadedBytes(s int64) {
+	p.state.mu.Lock()
+	defer p.state.mu.Unlock()
+	p.state.uploadedBytes += s
+}
+func (p *Progress) incrTotalAverage(s float64) {
+	p.state.mu.Lock()
+	defer p.state.mu.Unlock()
+	p.state.totalAverageRate += s
 }
 
 var (
@@ -133,11 +164,11 @@ var (
 )
 
 func (p *Progress) render(logMessage string) error {
-	strProgressBars, err := generateProgressBars(p)
+	strProgressBars, err := p.String()
 	if err != nil {
 		return err
 	}
-	strProgressStats := generateProgressStats(p)
+	strProgressStats := p.state.String()
 
 	clearAndWriteProgress(&p.config, strProgressStats, strProgressBars, logMessage)
 
@@ -202,90 +233,99 @@ func truncateDescription(description string, length int) string {
 	}
 }
 
-func generateProgressBars(p *Progress) (string, error) {
-	p.lock.Lock()
-	defer p.lock.Unlock()
-	var strProgressBars strings.Builder
-
+func (p *Progress) resetState() {
+	p.state.mu.Lock()
+	defer p.state.mu.Unlock()
 	p.state.uploaded = 0
 	p.state.totalAverageRate = 0
 	p.state.uploadedBytes = 0
-	p.state.maxDescriptionLength = 0
 	p.state.error = 0
-
-	for _, bar := range p.Bars {
-		if !bar.IsCompleted() {
-			sw := getStringWidth(&bar.config, bar.state.originalDescription, false)
-			if sw > p.state.maxDescriptionLength {
-				p.state.maxDescriptionLength = sw
-			}
-		}
-	}
-
-	for i, bar := range p.Bars {
-		if !bar.IsCompleted() {
-			bar.Describe(truncateDescription(bar.state.originalDescription, p.state.maxDescriptionLength))
-		}
-
-		strBar, err := bar.getBar()
-		if err != nil {
-			return "", err
-		}
-
-		if bar.IsError() {
-			p.state.error++
-			// p.state.errorBytes += float64(bar.config.max)
-			continue
-		}
-		p.state.uploadedBytes += bar.state.currentBytes
-
-		if bar.IsCompleted() {
-			p.state.uploaded++
-			continue
-		}
-
-		strProgressBars.WriteString(strBar)
-		if i != len(p.Bars)-1 && !bar.IsCompleted() {
-			strProgressBars.WriteString("\n")
-		}
-
-		if !bar.IsFinished() {
-			p.state.totalAverageRate += bar.state.averageRate
-		}
-	}
-
-	return strProgressBars.String(), nil
 }
 
-func generateProgressStats(p *Progress) string {
+func (p *Progress) String() (string, error) {
+	var bars strings.Builder
+
+	p.resetState()
+	p.updateMaxDescriptionLength()
+
+	for i, bar := range p.Bars {
+		updateProgressState(p, bar, &bars, i)
+	}
+
+	return bars.String(), nil
+}
+
+func updateProgressState(p *Progress, bar *Bar, bars *strings.Builder, index int) {
+	if !bar.IsCompleted() {
+		bar.Describe(truncateDescription(bar.state.originalDescription, p.state.maxDescriptionLength))
+	}
+
+	bar.mu.Lock()
+	strBar, err := bar.getBar()
+	bar.mu.Unlock()
+	if err != nil {
+		// Manejar el error de manera apropiada...
+		return
+	}
+
+	if bar.IsError() {
+		p.addError(bar.config.max)
+		return
+	}
+
+	p.incrUploadedBytes(bar.state.currentBytes)
+
+	if bar.IsCompleted() {
+		p.addUploaded()
+		return
+	}
+
+	bars.WriteString(strBar)
+	if index != len(p.Bars)-1 && !bar.IsCompleted() {
+		bars.WriteString("\n")
+	}
+
+	if !bar.IsFinished() {
+		p.incrTotalAverage(bar.state.averageRate)
+	}
+}
+
+func (ps *progressState) String() string {
 	var strProgressStats strings.Builder
+	p := ps.progress
 
-	uploadedBytesHumanize, uploadedBytesSuffix := humanizeBytes(p.state.uploadedBytes+p.state.existingBytes, false)
-	totalSizeHumanize, totalSizeSuffix := humanizeBytes(float64(p.state.totalSize), false)
-	speedHumanize, speedSuffix := humanizeBytes(p.state.totalAverageRate, false)
+	formatTransferredInfo := func() string {
+		uploadedBytesHumanize, uploadedBytesSuffix := humanizeBytes(float64(p.state.uploadedBytes+p.state.existingBytes), false)
+		totalSizeHumanize, totalSizeSuffix := humanizeBytes(float64(p.state.totalSize), false)
+		speedHumanize, speedSuffix := humanizeBytes(p.state.totalAverageRate, false)
 
-	transferredInfo := fmt.Sprintf("Transferred: %s, %s",
-		fmt.Sprintf("%s%s/%s%s, %d%%", uploadedBytesHumanize, uploadedBytesSuffix, totalSizeHumanize, totalSizeSuffix, calculatePercent(int(p.state.uploadedBytes+p.state.existingBytes), int(p.state.totalSize))),
-		fmt.Sprintf("%s%s/s", speedHumanize, speedSuffix),
-	)
-	strProgressStats.WriteString(transferredInfo)
-	strProgressStats.WriteString("\n")
-
-	progressInfo := ""
-	if p.state.totalTransfers != 0 {
-		progressInfo = fmt.Sprintf("Transferred: %d/%d, %d%%", p.state.uploaded+p.state.existing, p.state.totalTransfers, calculatePercent(p.state.uploaded+p.state.existing, p.state.totalTransfers))
-	} else {
-		progressInfo = fmt.Sprintf("Transferred: %d/%d, %d%%", p.state.uploaded, p.state.totalTransfers, 0)
-	}
-	strProgressStats.WriteString(progressInfo)
-	strProgressStats.WriteString("\n")
-
-	errorInfo := ""
-	if p.state.error > 0 {
-		errorInfo = fmt.Sprintf("Errors: %d\n", p.state.error)
+		return fmt.Sprintf("Transferred: %s, %s%s/s",
+			fmt.Sprintf("%s%s/%s%s, %d%%", uploadedBytesHumanize, uploadedBytesSuffix, totalSizeHumanize, totalSizeSuffix, calculatePercent(int(p.state.uploadedBytes+p.state.existingBytes), int(p.state.totalSize))),
+			speedHumanize, speedSuffix,
+		)
 	}
 
-	strProgressStats.WriteString(errorInfo)
+	formatProgressInfo := func() string {
+		if p.state.totalTransfers != 0 {
+			return fmt.Sprintf("Transferred: %d/%d, %d%%", p.state.uploaded+p.state.existing, p.state.totalTransfers, calculatePercent(p.state.uploaded+p.state.existing, p.state.totalTransfers))
+		}
+		return fmt.Sprintf("Transferred: %d/%d, %d%%", p.state.uploaded, p.state.totalTransfers, 0)
+	}
+
+	formatErrorInfo := func() string {
+		if p.state.error > 0 {
+			return fmt.Sprintf("Errors: %d\n", p.state.error)
+		}
+		return ""
+	}
+
+	strProgressStats.WriteString(formatTransferredInfo())
+	strProgressStats.WriteString("\n")
+
+	strProgressStats.WriteString(formatProgressInfo())
+	strProgressStats.WriteString("\n")
+
+	strProgressStats.WriteString(formatErrorInfo())
 
 	strProgressStats.WriteString("Transferring:")
 
@@ -330,29 +370,3 @@ func clearAndWriteProgress(config *progressConfig, strProgressStats string, strP
 	}
 	writeToProgress(*config, buf.Bytes())
 }
-
-// func clearProgressBars(config progressConfig, lines int) {
-// 	for i := 0; i < lines; i++ {
-// 		writeString(config, EraseLine)
-// 		writeString(config, MoveUp)
-// 	}
-// 	writeString(config, EraseLine)
-// 	writeString(config, MoveToStartOfLine)
-// }
-
-// func clearProgressBar(c barConfig, s barState) error {
-// 	if s.maxLineWidth == 0 {
-// 		return nil
-// 	}
-// 	if c.useANSICodes {
-// 		// write the "clear current line" ANSI escape sequence
-// 		return writeString(c, "\033[2K\r")
-// 	}
-// 	// fill the empty content
-// 	// to overwrite the progress bar and jump
-// 	// back to the beginning of the line
-// 	str := fmt.Sprintf("\r%s\r", strings.Repeat(" ", s.maxLineWidth))
-// 	return writeString(c, str)
-// 	// the following does not show correctly if the previous line is longer than subsequent line
-// 	// return writeString(c, "\r")
-// }

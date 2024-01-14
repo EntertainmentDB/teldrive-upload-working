@@ -27,7 +27,7 @@ func logn(n, b float64) float64 {
 }
 
 func humanizeBytes(s float64, iec bool) (string, string) {
-	sizes := []string{" B", " kB", " MB", " GB", " TB", " PB", " EB"}
+	sizes := []string{" B", " KB", " MB", " GB", " TB", " PB", " EB"}
 	base := 1000.0
 
 	if iec {
@@ -40,10 +40,13 @@ func humanizeBytes(s float64, iec bool) (string, string) {
 	}
 	e := math.Floor(logn(float64(s), base))
 	suffix := sizes[int(e)]
-	val := math.Floor(float64(s)/math.Pow(base, e)*10+0.5) / 10
-	f := "%.0f"
-	if val < 10 {
-		f = "%.1f"
+	// you can use math.Round(...) instead of math.Floor(...+0.5)
+	// rp is the rounding precision, change it to your need
+	rp := 1000.0
+	val := math.Floor(float64(s)/math.Pow(base, e)*rp+0.5) / rp
+	f := "%.1f"
+	if int(e) >= 3 {
+		f = fmt.Sprintf("%%.%df", int(e)-1)
 	}
 
 	return fmt.Sprintf(f, val), suffix

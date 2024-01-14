@@ -117,13 +117,13 @@ func main() {
 			if err != nil {
 				log.Fatal("get files in directory info failed", zap.Error(err))
 			}
-			uploader.Progress.AddTransfers(info.TotalFiles, info.TotalSize)
+			uploader.Progress.AddTransfer(info.TotalFiles, info.TotalSize)
 			err = uploader.UploadFilesInDirectory(*sourcePath, path)
 			if err != nil {
 				log.Fatal("upload files in directory failed", zap.Error(err))
 			}
 		} else {
-			uploader.Progress.AddTransfers(1, fileInfo.Size())
+			uploader.Progress.AddTransfer(1, fileInfo.Size())
 			err := uploader.UploadFile(*sourcePath, path)
 			if err != nil {
 				log.Fatal("upload failed", zap.Error(err))
