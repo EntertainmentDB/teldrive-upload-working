@@ -1,15 +1,13 @@
 package types
 
 type PartFile struct {
-	ID         string `json:"id"`
-	Name       string `json:"name"`
-	PartId     int    `json:"partId"`
-	PartNo     int    `json:"partNo"`
-	TotalParts int    `json:"totalParts"`
-	Size       int64  `json:"size"`
-	ChannelID  int64  `json:"channelId"`
-	Encrypted  bool   `json:"encrypted"`
-	Salt       string `json:"salt"`
+	Name      string `json:"name"`
+	PartId    int    `json:"partId"`
+	PartNo    int    `json:"partNo"`
+	Size      int64  `json:"size"`
+	ChannelID int64  `json:"channelId"`
+	Encrypted bool   `json:"encrypted"`
+	Salt      string `json:"salt"`
 }
 
 type FilePart struct {

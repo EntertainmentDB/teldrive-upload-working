@@ -306,19 +306,19 @@ func (u *UploadService) UploadFile(filePath string, destDir string) error {
 			resp, err := u.http.CallJSON(context.TODO(), &opts, nil, &partFile)
 
 			if err != nil {
-				u.logger.Error("send part file failed", zap.String("filePath", filePath), zap.Int64("partNumber", partNumber+1), zap.Int64("totalParts", totalParts), zap.Int64("size", partFile.Size), zap.Error(err))
+				u.logger.Error("send part file failed", zap.String("filePath", filePath), zap.Int64("partNumber", partNumber+1), zap.Int64("totalParts", totalParts), zap.Int64("partSize", contentLength), zap.Error(err))
 				return
 			}
 			if resp.StatusCode == 201 {
 				uploadedParts <- partFile
-				u.logger.Debug("part file sent", zap.String("fileName", fileName), zap.String("partName", partName), zap.Int64("partNumber", partNumber+1), zap.Int64("totalParts", totalParts), zap.Int64("size", partFile.Size), zap.Int("partId", partFile.PartId))
+				u.logger.Debug("part file sent", zap.String("fileName", fileName), zap.String("partName", partFile.Name), zap.Int("partNumber", partFile.PartNo), zap.Int64("totalParts", totalParts), zap.Int64("partSize", partFile.Size), zap.Int("partId", partFile.PartId))
 			}
 		}(i, start, end)
 	}
 
 	var parts []types.FilePart
 	for uploadPart := range uploadedParts {
-		if uploadPart.PartId != 0 {
+		if uploadPart.PartId != 0 && uploadPart.Size != 0 {
 			parts = append(parts, types.FilePart{ID: int64(uploadPart.PartId), PartNo: uploadPart.PartNo, Salt: uploadPart.Salt})
 		}
 	}
