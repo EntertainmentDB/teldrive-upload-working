@@ -45,7 +45,9 @@ func (lw *logWriter) Write(b []byte) (n int, err error) {
 }
 
 type Progress struct {
-	Bars      []*Bar
+	mu   sync.Mutex
+	Bars []*Bar
+
 	LogWriter *logWriter
 	wg        *sync.WaitGroup
 	config    progressConfig
@@ -104,6 +106,8 @@ func (p *Progress) StartProgress() func() {
 }
 
 func (p *Progress) AddBar(newBar *Bar) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
 	p.Bars = append(p.Bars, newBar)
 }
 
