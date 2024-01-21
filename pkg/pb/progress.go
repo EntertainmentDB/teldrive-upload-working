@@ -33,6 +33,7 @@ type progressState struct {
 	totalSize            int64
 	maxDescriptionLength int
 	// error    int
+	startTime time.Time
 }
 
 type logWriter struct {
@@ -70,6 +71,8 @@ func NewProgress(wg *sync.WaitGroup, options ...ProgressOption) *Progress {
 
 func (p *Progress) StartProgress() func() {
 	stopProgress := make(chan struct{})
+	now := time.Now()
+	p.state.startTime = now
 
 	// oldLogPrint := fs.LogPrint
 
@@ -303,9 +306,10 @@ func (ps *progressState) String() string {
 		totalSizeHumanize, totalSizeSuffix := humanizeBytes(float64(p.state.totalSize), false)
 		speedHumanize, speedSuffix := humanizeBytes(p.state.totalAverageRate, false)
 
-		return fmt.Sprintf("Transferred: %s, %s%s/s",
+		return fmt.Sprintf("Transferred: %s, %s%s/s, ETA %s",
 			fmt.Sprintf("%s%s/%s%s, %d%%", uploadedBytesHumanize, uploadedBytesSuffix, totalSizeHumanize, totalSizeSuffix, calculatePercent(int(p.state.uploadedBytes+p.state.existingBytes), int(p.state.totalSize))),
 			speedHumanize, speedSuffix,
+			calculateETA(p.state.totalAverageRate, float64(p.state.totalSize), float64(p.state.uploadedBytes+p.state.existingBytes)).String(),
 		)
 	}
 
@@ -323,10 +327,17 @@ func (ps *progressState) String() string {
 		return ""
 	}
 
+	formatElapsedTime := func() string {
+		return fmt.Sprintf("Elapsed time: %s", (time.Duration(time.Since(ps.startTime).Seconds()) * time.Second).String())
+	}
+
 	strProgressStats.WriteString(formatTransferredInfo())
 	strProgressStats.WriteString("\n")
 
 	strProgressStats.WriteString(formatProgressInfo())
+	strProgressStats.WriteString("\n")
+
+	strProgressStats.WriteString(formatElapsedTime())
 	strProgressStats.WriteString("\n")
 
 	strProgressStats.WriteString(formatErrorInfo())

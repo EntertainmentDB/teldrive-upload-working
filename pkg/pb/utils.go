@@ -4,7 +4,23 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"time"
 )
+
+func calculateETA(rate, max, current float64) time.Duration {
+	var eta time.Duration
+	// timeLeft = time.Duration((max - current) / rate)
+	eta = (time.Duration((1/rate)*(max-current)) * time.Second)
+
+	if rate == 0 {
+		eta = (time.Duration((max - current)) * time.Second)
+	}
+	if eta < 0 {
+		return 0
+	}
+	return eta
+
+}
 
 func calculatePercent(current int, max int) int {
 	percent := int((float64(current) / float64(max)) * 100)

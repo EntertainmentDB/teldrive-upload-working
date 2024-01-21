@@ -551,11 +551,7 @@ func getBarString(c *barConfig, s *barState) (int, string, error) {
 	// show time prediction in "current/total" seconds format
 	switch {
 	case c.predictTime:
-		rightBracNum := (time.Duration((1/s.averageRate)*(float64(c.max)-float64(s.currentNum))) * time.Second)
-		if rightBracNum.Seconds() < 0 {
-			rightBracNum = 0 * time.Second
-		}
-		rightBrac = rightBracNum.String()
+		rightBrac = calculateETA(s.averageRate, float64(c.max), float64(s.currentNum)).String()
 		fallthrough
 	case c.elapsedTime:
 		leftBrac = (time.Duration(time.Since(s.startTime).Seconds()) * time.Second).String()
