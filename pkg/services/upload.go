@@ -345,7 +345,7 @@ func (u *UploadService) UploadFile(filePath string, destDir string) error {
 		Encrypted: encryptFile,
 	}
 
-	json.Marshal(filePayload)
+	_, err = json.Marshal(filePayload)
 
 	if err != nil {
 		return err
