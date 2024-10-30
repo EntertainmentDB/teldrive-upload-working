@@ -208,34 +208,6 @@ func (u *UploadService) UploadFile(filePath string, destDir string) error {
 		encryptFile = uploadFile.Parts[0].Encrypted
 	}
 
-	// var bars *mpb.Bar
-	// barOptions := []mpb.BarOption{
-	// 	mpb.PrependDecorators(
-	// 		decor.Name("shortenedName", decor.WC{C: decor.DSyncWidthR | decor.DextraSpace}),
-	// 		decor.Name(" ("),
-	// 		decor.Percentage(decor.WCSyncSpace, decor.WC{C: decor.DSyncWidthR}),
-	// 		decor.Name(")  "),
-	// 		decor.Counters(decor.SizeB1000(0), "% .2f/% .2f", decor.WC{C: decor.DSyncWidthR}),
-	// 	), mpb.AppendDecorators(
-	// 		// decor.EwmaETA(decor.ET_STYLE_GO, 60),
-	// 		decor.AverageETA(decor.ET_STYLE_GO),
-	// 		decor.Name(" | "),
-	// 		// decor.OnComplete(decor.EwmaSpeed(decor.SizeB1000(0), "% .2f", 60, decor.WC{C: decor.DSyncWidthR}), "completed"),
-	// 		decor.OnComplete(decor.AverageSpeed(decor.SizeB1000(0), "% .2f", decor.WC{C: decor.DSyncWidthR}), "completed"),
-	// 	),
-	// }
-
-	// bar = u.pb.AddBar(fileSize,
-	// 	barOptions...,
-	// )
-	// myBar := u.pb.AddBar(fileName, fileSize)
-	// stopProgress := pb.StartProgress()
-	// u.progress = mpb.New(mpb.WithWidth(64))
-	// bar = u.pb.New(fileSize,
-	// 	mpb.BarStyle().Rbound("|"),
-	// 	barOptions...,
-	// )
-
 	go func() {
 		wg.Wait()
 		close(uploadedParts)
@@ -485,26 +457,6 @@ func (u *UploadService) list(path string) (files []types.FileInfo, err error) {
 		}
 	}
 
-	// var limit uint64 = 500
-	// var nextPageToken string = ""
-	// for {
-	// 	opts := &types.MetadataRequestOptions{
-	// 		PerPage:       limit,
-	// 		NextPageToken: nextPageToken,
-	// 	}
-
-	// 	info, err := u.readMetaDataForPath(path, opts)
-	// 	if err != nil {
-	// 		return nil, err
-	// 	}
-
-	// 	files = append(files, info.Files...)
-
-	// 	nextPageToken = info.NextPageToken
-	// 	if nextPageToken == "" {
-	// 		break
-	// 	}
-	// }
 	return files, nil
 }
 
