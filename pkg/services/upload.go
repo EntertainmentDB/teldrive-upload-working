@@ -23,6 +23,7 @@ import (
 	"github.com/rclone/rclone/fs/fserrors"
 	"github.com/rclone/rclone/lib/rest"
 	"go.uber.org/zap"
+	"golang.org/x/sync/errgroup"
 )
 
 var retryErrorCodes = []int{
@@ -76,6 +77,8 @@ func shouldRetry(ctx context.Context, resp *http.Response, err error) (bool, err
 }
 
 func (u *UploadService) checkFileExists(fileName string, path string) (bool, error) {
+	u.logger.Debug("checking file exists", zap.String("fileName", fileName), zap.String("path", path))
+
 	opts := rest.Opts{
 		Method: "GET",
 		Path:   "/api/files",
@@ -409,12 +412,11 @@ func (u *UploadService) readMetaDataForPath(path string, options *types.Metadata
 		Method: "GET",
 		Path:   "/api/files",
 		Parameters: url.Values{
-			"path":          []string{path},
-			"perPage":       []string{strconv.FormatUint(options.PerPage, 10)},
-			"sort":          []string{"name"},
-			"order":         []string{"asc"},
-			"op":            []string{"list"},
-			"nextPageToken": []string{options.NextPageToken},
+			"path":  []string{path},
+			"limit": []string{strconv.FormatInt(options.Limit, 10)},
+			"sort":  []string{"id"},
+			"op":    []string{"list"},
+			"page":  []string{strconv.FormatInt(options.Page, 10)},
 		},
 	}
 	var err error
@@ -438,27 +440,71 @@ func (u *UploadService) readMetaDataForPath(path string, options *types.Metadata
 }
 
 func (u *UploadService) list(path string) (files []types.FileInfo, err error) {
+	pageSize := int64(500)
+	opts := &types.MetadataRequestOptions{
+		Limit: pageSize,
+		Page:  1,
+	}
 
-	var limit uint64 = 500
-	var nextPageToken string = ""
-	for {
-		opts := &types.MetadataRequestOptions{
-			PerPage:       limit,
-			NextPageToken: nextPageToken,
+	files = []types.FileInfo{}
+
+	info, err := u.readMetaDataForPath(path, opts)
+
+	if err != nil {
+		return nil, err
+	}
+
+	files = append(files, info.Files...)
+
+	mu := sync.Mutex{}
+	if info.Meta.TotalPages > 1 {
+		g, _ := errgroup.WithContext(u.ctx)
+
+		g.SetLimit(8)
+
+		for i := 2; i <= info.Meta.TotalPages; i++ {
+			page := i
+			g.Go(func() error {
+				opts := &types.MetadataRequestOptions{
+					Limit: pageSize,
+					Page:  int64(page),
+				}
+				info, err := u.readMetaDataForPath(path, opts)
+
+				if err != nil {
+					return err
+				}
+				mu.Lock()
+				files = append(files, info.Files...)
+				mu.Unlock()
+				return nil
+			})
 		}
-
-		info, err := u.readMetaDataForPath(path, opts)
-		if err != nil {
+		if err := g.Wait(); err != nil {
 			return nil, err
 		}
-
-		files = append(files, info.Files...)
-
-		nextPageToken = info.NextPageToken
-		if nextPageToken == "" {
-			break
-		}
 	}
+
+	// var limit uint64 = 500
+	// var nextPageToken string = ""
+	// for {
+	// 	opts := &types.MetadataRequestOptions{
+	// 		PerPage:       limit,
+	// 		NextPageToken: nextPageToken,
+	// 	}
+
+	// 	info, err := u.readMetaDataForPath(path, opts)
+	// 	if err != nil {
+	// 		return nil, err
+	// 	}
+
+	// 	files = append(files, info.Files...)
+
+	// 	nextPageToken = info.NextPageToken
+	// 	if nextPageToken == "" {
+	// 		break
+	// 	}
+	// }
 	return files, nil
 }
 

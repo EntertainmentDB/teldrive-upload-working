@@ -35,11 +35,10 @@ type CreateDirRequest struct {
 	Path string `json:"path"`
 }
 
+// MetadataRequestOptions represents all the options when listing folder contents
 type MetadataRequestOptions struct {
-	PerPage       uint64
-	SearchField   string
-	Search        string
-	NextPageToken string
+	Page  int64
+	Limit int64
 }
 
 // FileInfo represents a file when listing folder contents
@@ -53,8 +52,14 @@ type FileInfo struct {
 	ModTime  string `json:"updatedAt"`
 }
 
+type Meta struct {
+	Count       int `json:"count,omitempty"`
+	TotalPages  int `json:"totalPages,omitempty"`
+	CurrentPage int `json:"currentPage,omitempty"`
+}
+
 // ReadMetadataResponse is the response when listing folder contents
 type ReadMetadataResponse struct {
-	Files         []FileInfo `json:"results"`
-	NextPageToken string     `json:"nextPageToken,omitempty"`
+	Files []FileInfo `json:"files"`
+	Meta  Meta       `json:"meta"`
 }
