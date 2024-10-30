@@ -2,9 +2,11 @@ package logger
 
 import (
 	"io"
+	"path/filepath"
 	"time"
 	"uploader/config"
 	"uploader/pkg/pb"
+	"uploader/pkg/utils"
 
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
@@ -45,8 +47,10 @@ func InitLogger(options ...LoggerOption) *zap.Logger {
 	fileEncoderConfig.EncodeTime = zapcore.ISO8601TimeEncoder
 	fileEncoder := zapcore.NewJSONEncoder(fileEncoderConfig)
 
+	logPath := filepath.Join(utils.ExecutableDir(), "logs", "uploader.log")
+
 	fileWriter := zapcore.AddSync(&lumberjack.Logger{
-		Filename:   "logs/uploader.log",
+		Filename:   logPath,
 		MaxSize:    10,
 		MaxBackups: 3,
 		MaxAge:     7,

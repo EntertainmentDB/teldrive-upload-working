@@ -1,6 +1,9 @@
 package config
 
 import (
+	"path/filepath"
+	"uploader/pkg/utils"
+
 	"github.com/joho/godotenv"
 	"github.com/kelseyhightower/envconfig"
 	"github.com/rclone/rclone/fs"
@@ -23,7 +26,9 @@ var config Config
 
 func InitConfig() {
 
-	err := godotenv.Load("upload.env")
+	root := utils.ExecutableDir()
+	envPath := filepath.Join(root, "upload.env")
+	err := godotenv.Load(envPath)
 	if err != nil {
 		panic(err)
 	}
