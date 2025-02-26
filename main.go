@@ -12,6 +12,7 @@ import (
 	"uploader/pkg/logger"
 	"uploader/pkg/pb"
 	"uploader/pkg/services"
+	"uploader/pkg/types"
 
 	"flag"
 
@@ -84,6 +85,30 @@ func main() {
 
 	// progress := mpb.New(mpb.WithWaitGroup(&wg))
 
+	var (
+		session     types.Session
+		sessionResp *http.Response
+		err         error
+	)
+
+	opts := rest.Opts{
+		Method: "GET",
+		Path:   "/api/auth/session",
+	}
+
+	err = pacer.Call(func() (bool, error) {
+		sessionResp, err = httpClient.CallJSON(ctx, &opts, nil, &session)
+		return services.ShouldRetry(ctx, sessionResp, err)
+	})
+
+	if err != nil {
+		log.Fatal("get session failed", zap.Error(err))
+	}
+
+	if session.UserId == 0 {
+		log.Fatal("invalid session")
+	}
+
 	uploader := services.NewUploadService(
 		httpClient,
 		numWorkers,
@@ -98,6 +123,7 @@ func main() {
 		progress,
 		&wg,
 		log,
+		session.UserId,
 		*dryRun,
 	)
 
@@ -106,7 +132,7 @@ func main() {
 		path = "/" + path
 	}
 
-	err := uploader.CreateRemoteDir(path)
+	err = uploader.CreateRemoteDir(path)
 
 	if err != nil {
 		log.Fatal("create remote dir failed", zap.Error(err))
@@ -127,7 +153,11 @@ func main() {
 			}
 		} else {
 			uploader.Progress.AddTransfer(1, fileInfo.Size())
-			err := uploader.UploadFile(*sourcePath, path)
+			dirID, err := uploader.GetDirectoryId(path)
+			if err != nil {
+				log.Fatal("get directory id failed", zap.Error(err))
+			}
+			err = uploader.UploadFile(*sourcePath, path, dirID)
 			if err != nil {
 				log.Fatal("upload failed", zap.Error(err))
 			}

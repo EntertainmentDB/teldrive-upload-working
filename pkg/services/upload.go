@@ -49,6 +49,7 @@ type UploadService struct {
 	Progress          *pb.Progress
 	wg                *sync.WaitGroup
 	logger            *zap.Logger
+	userID            int64
 	isDryRun          bool
 }
 
@@ -66,6 +67,7 @@ func NewUploadService(
 	progress *pb.Progress,
 	wg *sync.WaitGroup,
 	logger *zap.Logger,
+	userID int64,
 	isDryRun bool,
 ) *UploadService {
 	return &UploadService{
@@ -82,11 +84,12 @@ func NewUploadService(
 		wg:                wg,
 		Progress:          progress,
 		logger:            logger,
+		userID:            userID,
 		isDryRun:          isDryRun,
 	}
 }
 
-func shouldRetry(ctx context.Context, resp *http.Response, err error) (bool, error) {
+func ShouldRetry(ctx context.Context, resp *http.Response, err error) (bool, error) {
 	if fserrors.ContextError(ctx, &err) {
 		return false, err
 	}
@@ -112,7 +115,7 @@ func (u *UploadService) checkFileExists(fileName string, path string) (bool, err
 
 	err = u.pacer.Call(func() (bool, error) {
 		resp, err = u.http.CallJSON(u.ctx, &opts, nil, &info)
-		return shouldRetry(u.ctx, resp, err)
+		return ShouldRetry(u.ctx, resp, err)
 	})
 	if err != nil {
 		if u.isDryRun && strings.Contains(err.Error(), "404") {
@@ -127,7 +130,49 @@ func (u *UploadService) checkFileExists(fileName string, path string) (bool, err
 	return false, nil
 }
 
-func (u *UploadService) UploadFile(filePath string, destDir string) error {
+func (u *UploadService) GetDirectoryId(path string) (string, error) {
+	destDirParent := strings.ReplaceAll(filepath.Dir(path), "\\", "/")
+	lastDir := filepath.Base(path)
+
+	opts := rest.Opts{
+		Method: "GET",
+		Path:   "/api/files",
+		Parameters: url.Values{
+			"path":      []string{destDirParent},
+			"name":      []string{lastDir},
+			"operation": []string{"find"},
+			"type":      []string{"folder"},
+		},
+	}
+	var (
+		info types.ReadMetadataResponse
+		resp *http.Response
+		err  error
+	)
+
+	err = u.pacer.Call(func() (bool, error) {
+		resp, err = u.http.CallJSON(u.ctx, &opts, nil, &info)
+		return ShouldRetry(u.ctx, resp, err)
+	})
+	if err != nil {
+		u.logger.Error("find parent dir failed", zap.String("destDirParent", destDirParent), zap.String("lastDir", lastDir), zap.Error(err))
+		return "", err
+	}
+	if info.Meta.Count == 0 {
+		if !u.isDryRun {
+			u.logger.Error("parent dir not found", zap.String("destDirParent", destDirParent), zap.String("lastDir", lastDir))
+			return "", fs.ErrorDirNotFound
+		}
+
+		info.Files = append(info.Files, types.FileInfo{
+			Id: "0",
+		})
+	}
+
+	return info.Files[0].Id, nil
+}
+
+func (u *UploadService) UploadFile(filePath string, destDir string, directoryID string) error {
 	file, err := os.Open(filePath)
 	if err != nil {
 		u.logger.Fatal("open file failed", zap.String("filePath", filePath), zap.Error(err))
@@ -180,16 +225,16 @@ func (u *UploadService) UploadFile(filePath string, destDir string) error {
 		return nil
 	}
 
+	input := fmt.Sprintf("%s:%s:%d:%d", directoryID, fileName, fileSize, u.userID)
+
+	hash := md5.Sum([]byte(input))
+	hashString := hex.EncodeToString(hash[:])
+
 	if u.isDryRun {
 		// u.Progress.AddExisting(fileSize)
 		u.logger.Info("dry run mode enabled, skipping upload", zap.String("fileName", fileName))
 		return nil
 	}
-
-	input := fmt.Sprintf("%s:%s:%d", fileName, destDir, fileSize)
-
-	hash := md5.Sum([]byte(input))
-	hashString := hex.EncodeToString(hash[:])
 
 	uploadURL := fmt.Sprintf("/api/uploads/%s", hashString)
 
@@ -203,7 +248,7 @@ func (u *UploadService) UploadFile(filePath string, destDir string) error {
 
 	err = u.pacer.Call(func() (bool, error) {
 		resp, err := u.http.CallJSON(u.ctx, &opts, nil, &uploadParts)
-		return shouldRetry(u.ctx, resp, err)
+		return ShouldRetry(u.ctx, resp, err)
 	})
 	if err == nil {
 		existingParts = make(map[int]types.PartFile, len(uploadParts))
@@ -358,7 +403,7 @@ func (u *UploadService) UploadFile(filePath string, destDir string) error {
 
 	err = u.pacer.Call(func() (bool, error) {
 		resp, err := u.http.CallJSON(u.ctx, &opts, &filePayload, nil)
-		return shouldRetry(u.ctx, resp, err)
+		return ShouldRetry(u.ctx, resp, err)
 	})
 
 	if err != nil {
@@ -367,7 +412,7 @@ func (u *UploadService) UploadFile(filePath string, destDir string) error {
 
 	err = u.pacer.Call(func() (bool, error) {
 		resp, err := u.http.CallJSON(u.ctx, &rest.Opts{Method: "DELETE", Path: uploadURL}, nil, nil)
-		return shouldRetry(u.ctx, resp, err)
+		return ShouldRetry(u.ctx, resp, err)
 	})
 
 	if err != nil {
@@ -398,7 +443,7 @@ func (u *UploadService) CreateRemoteDir(path string) error {
 
 	err := u.pacer.Call(func() (bool, error) {
 		resp, err := u.http.CallJSON(u.ctx, &opts, &mkdir, nil)
-		return shouldRetry(u.ctx, resp, err)
+		return ShouldRetry(u.ctx, resp, err)
 	})
 
 	if err != nil {
@@ -426,7 +471,7 @@ func (u *UploadService) readMetaDataForPath(path string, options *types.Metadata
 
 	err = u.pacer.Call(func() (bool, error) {
 		resp, err = u.http.CallJSON(u.ctx, &opts, nil, &info)
-		return shouldRetry(u.ctx, resp, err)
+		return ShouldRetry(u.ctx, resp, err)
 	})
 	if err != nil && resp != nil && resp.StatusCode == 404 {
 		if u.isDryRun {
@@ -542,6 +587,12 @@ func (u *UploadService) UploadFilesInDirectory(sourcePath string, destDir string
 		} else {
 			exists := u.checkFileExistsInDirectory(entry.Name(), filesInRemote)
 			if !exists {
+				dirID, err := u.GetDirectoryId(destDir)
+				if err != nil {
+					u.logger.Error("get directory id failed", zap.String("destDir", destDir), zap.Error(err))
+					return err
+				}
+
 				u.wg.Add(1)
 				u.concurrentFiles <- struct{}{}
 
@@ -551,7 +602,7 @@ func (u *UploadService) UploadFilesInDirectory(sourcePath string, destDir string
 						<-u.concurrentFiles
 					}()
 
-					err := u.UploadFile(fullPath, destDir)
+					err := u.UploadFile(fullPath, destDir, dirID)
 					if err != nil {
 						u.logger.Error("upload failed", zap.String("fullPath", fullPath), zap.Error(err))
 						return

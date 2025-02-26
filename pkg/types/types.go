@@ -71,3 +71,9 @@ type ReadMetadataResponse struct {
 	Files []FileInfo `json:"items"`
 	Meta  Meta       `json:"meta"`
 }
+
+type Session struct {
+	UserName string `json:"userName"`
+	UserId   int64  `json:"userId"`
+	Hash     string `json:"hash"`
+}
