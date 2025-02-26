@@ -26,6 +26,8 @@ func main() {
 	destDir := flag.String("dest", "", "Remote directory for uploaded files")
 	workers := flag.Int("workers", 0, "Number of current workers to use when uploading multi-parts")
 	transfers := flag.Int("transfers", 0, "Number of current files to upload at once")
+	dryRun := flag.Bool("dry-run", false, "Perform a trial run with no changes made")
+
 	flag.Parse()
 
 	if *sourcePath == "" || *destDir == "" {
@@ -96,6 +98,7 @@ func main() {
 		progress,
 		&wg,
 		log,
+		*dryRun,
 	)
 
 	path := *destDir

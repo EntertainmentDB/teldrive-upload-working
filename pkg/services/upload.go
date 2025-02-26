@@ -49,6 +49,7 @@ type UploadService struct {
 	Progress          *pb.Progress
 	wg                *sync.WaitGroup
 	logger            *zap.Logger
+	isDryRun          bool
 }
 
 func NewUploadService(
@@ -65,6 +66,7 @@ func NewUploadService(
 	progress *pb.Progress,
 	wg *sync.WaitGroup,
 	logger *zap.Logger,
+	isDryRun bool,
 ) *UploadService {
 	return &UploadService{
 		http:              http,
@@ -80,6 +82,7 @@ func NewUploadService(
 		wg:                wg,
 		Progress:          progress,
 		logger:            logger,
+		isDryRun:          isDryRun,
 	}
 }
 
@@ -112,6 +115,9 @@ func (u *UploadService) checkFileExists(fileName string, path string) (bool, err
 		return shouldRetry(u.ctx, resp, err)
 	})
 	if err != nil {
+		if u.isDryRun && strings.Contains(err.Error(), "404") {
+			return false, nil
+		}
 		return false, err
 	}
 	if resp != nil && resp.StatusCode != 404 && len(info.Files) > 0 {
@@ -171,6 +177,12 @@ func (u *UploadService) UploadFile(filePath string, destDir string) error {
 	if exists {
 		// u.Progress.AddExisting(fileSize)
 		u.logger.Info("file exists", zap.String("fileName", fileName))
+		return nil
+	}
+
+	if u.isDryRun {
+		// u.Progress.AddExisting(fileSize)
+		u.logger.Info("dry run mode enabled, skipping upload", zap.String("fileName", fileName))
 		return nil
 	}
 
@@ -367,6 +379,10 @@ func (u *UploadService) UploadFile(filePath string, destDir string) error {
 	return nil
 }
 func (u *UploadService) CreateRemoteDir(path string) error {
+	if u.isDryRun {
+		return nil
+	}
+
 	opts := rest.Opts{
 		Method: "POST",
 		Path:   "/api/files/mkdir",
@@ -412,8 +428,18 @@ func (u *UploadService) readMetaDataForPath(path string, options *types.Metadata
 		resp, err = u.http.CallJSON(u.ctx, &opts, nil, &info)
 		return shouldRetry(u.ctx, resp, err)
 	})
-
 	if err != nil && resp != nil && resp.StatusCode == 404 {
+		if u.isDryRun {
+			return &types.ReadMetadataResponse{
+				Meta: types.Meta{
+					Count:       0,
+					TotalPages:  0,
+					CurrentPage: 1,
+				},
+				Files: []types.FileInfo{},
+			}, nil
+		}
+
 		return nil, fs.ErrorDirNotFound
 	}
 
@@ -531,7 +557,7 @@ func (u *UploadService) UploadFilesInDirectory(sourcePath string, destDir string
 						return
 					}
 
-					if u.deleteAfterUpload {
+					if u.deleteAfterUpload && !u.isDryRun {
 						err = os.Remove(fullPath)
 						if err != nil {
 							u.logger.Error("delete file failed", zap.String("fullPath", fullPath), zap.Error(err))
