@@ -69,7 +69,7 @@ func main() {
 	}
 
 	authCookie := &http.Cookie{
-		Name:  "user-session",
+		Name:  "access_token",
 		Value: config.SessionToken,
 	}
 

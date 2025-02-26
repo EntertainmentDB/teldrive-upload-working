@@ -51,7 +51,21 @@ type UploadService struct {
 	logger            *zap.Logger
 }
 
-func NewUploadService(http *rest.Client, numWorkers int, numTransfers int, partSize int64, encryptFiles bool, randomisePart bool, channelID int64, deleteAfterUpload bool, pacer *fs.Pacer, ctx context.Context, progress *pb.Progress, wg *sync.WaitGroup, logger *zap.Logger) *UploadService {
+func NewUploadService(
+	http *rest.Client,
+	numWorkers int,
+	numTransfers int,
+	partSize int64,
+	encryptFiles bool,
+	randomisePart bool,
+	channelID int64,
+	deleteAfterUpload bool,
+	pacer *fs.Pacer,
+	ctx context.Context,
+	progress *pb.Progress,
+	wg *sync.WaitGroup,
+	logger *zap.Logger,
+) *UploadService {
 	return &UploadService{
 		http:              http,
 		numWorkers:        numWorkers,
@@ -83,9 +97,9 @@ func (u *UploadService) checkFileExists(fileName string, path string) (bool, err
 		Method: "GET",
 		Path:   "/api/files",
 		Parameters: url.Values{
-			"path": []string{path},
-			"op":   []string{"find"},
-			"name": []string{fileName},
+			"path":      []string{path},
+			"operation": []string{"find"},
+			"name":      []string{fileName},
 		},
 	}
 
@@ -155,7 +169,7 @@ func (u *UploadService) UploadFile(filePath string, destDir string) error {
 		return err
 	}
 	if exists {
-		u.Progress.AddExisting(fileSize)
+		// u.Progress.AddExisting(fileSize)
 		u.logger.Info("file exists", zap.String("fileName", fileName))
 		return nil
 	}
@@ -167,24 +181,22 @@ func (u *UploadService) UploadFile(filePath string, destDir string) error {
 
 	uploadURL := fmt.Sprintf("/api/uploads/%s", hashString)
 
+	var uploadParts []types.PartFile
 	var existingParts map[int]types.PartFile
-	var uploadFile types.UploadFile
 
-	if u.partSize < fileSize {
-		opts := rest.Opts{
-			Method: "GET",
-			Path:   uploadURL,
-		}
+	opts := rest.Opts{
+		Method: "GET",
+		Path:   uploadURL,
+	}
 
-		err := u.pacer.Call(func() (bool, error) {
-			resp, err := u.http.CallJSON(u.ctx, &opts, nil, &uploadFile)
-			return shouldRetry(u.ctx, resp, err)
-		})
-		if err == nil {
-			existingParts = make(map[int]types.PartFile, len(uploadFile.Parts))
-			for _, part := range uploadFile.Parts {
-				existingParts[part.PartNo] = part
-			}
+	err = u.pacer.Call(func() (bool, error) {
+		resp, err := u.http.CallJSON(u.ctx, &opts, nil, &uploadParts)
+		return shouldRetry(u.ctx, resp, err)
+	})
+	if err == nil {
+		existingParts = make(map[int]types.PartFile, len(uploadParts))
+		for _, part := range uploadParts {
+			existingParts[part.PartNo] = part
 		}
 	}
 
@@ -202,10 +214,10 @@ func (u *UploadService) UploadFile(filePath string, destDir string) error {
 
 	encryptFile := u.encryptFiles
 
-	if len(uploadFile.Parts) > 0 {
-		channelID = uploadFile.Parts[0].ChannelID
+	if len(uploadParts) > 0 {
+		channelID = uploadParts[0].ChannelID
 
-		encryptFile = uploadFile.Parts[0].Encrypted
+		encryptFile = uploadParts[0].Encrypted
 	}
 
 	go func() {
@@ -268,6 +280,7 @@ func (u *UploadService) UploadFile(filePath string, destDir string) error {
 				Path:          uploadURL,
 				Body:          reader,
 				ContentLength: &contentLength,
+				ContentType:   "application/octet-stream",
 				Parameters: url.Values{
 					"partName":  []string{partName},
 					"fileName":  []string{fileName},
@@ -284,7 +297,7 @@ func (u *UploadService) UploadFile(filePath string, destDir string) error {
 				u.logger.Error("send part file failed", zap.String("filePath", filePath), zap.Int64("partNumber", partNumber+1), zap.Int64("totalParts", totalParts), zap.Int64("partSize", contentLength), zap.Error(err))
 				return
 			}
-			if resp.StatusCode == 201 {
+			if resp.StatusCode == 200 {
 				uploadedParts <- partFile
 				u.logger.Debug("part file sent", zap.String("fileName", fileName), zap.String("partName", partFile.Name), zap.Int("partNumber", partFile.PartNo), zap.Int64("totalParts", totalParts), zap.Int64("partSize", partFile.Size), zap.Int("partId", partFile.PartId))
 			}
@@ -326,7 +339,7 @@ func (u *UploadService) UploadFile(filePath string, destDir string) error {
 		return err
 	}
 
-	opts := rest.Opts{
+	opts = rest.Opts{
 		Method: "POST",
 		Path:   "/api/files",
 	}
@@ -356,14 +369,14 @@ func (u *UploadService) UploadFile(filePath string, destDir string) error {
 func (u *UploadService) CreateRemoteDir(path string) error {
 	opts := rest.Opts{
 		Method: "POST",
-		Path:   "/api/files/directories",
+		Path:   "/api/files/mkdir",
 	}
 
 	if len(path) == 0 || path[0] != '/' {
 		path = "/" + path
 	}
 
-	mkdir := types.CreateDirRequest{
+	mkdir := types.CreateFileRequest{
 		Path: path,
 	}
 
@@ -384,11 +397,11 @@ func (u *UploadService) readMetaDataForPath(path string, options *types.Metadata
 		Method: "GET",
 		Path:   "/api/files",
 		Parameters: url.Values{
-			"path":  []string{path},
-			"limit": []string{strconv.FormatInt(options.Limit, 10)},
-			"sort":  []string{"id"},
-			"op":    []string{"list"},
-			"page":  []string{strconv.FormatInt(options.Page, 10)},
+			"path":      []string{path},
+			"limit":     []string{strconv.FormatInt(options.Limit, 10)},
+			"sort":      []string{"id"},
+			"operation": []string{"list"},
+			"page":      []string{strconv.FormatInt(options.Page, 10)},
 		},
 	}
 	var err error
