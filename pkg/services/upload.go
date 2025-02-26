@@ -23,7 +23,6 @@ import (
 	"github.com/rclone/rclone/fs/fserrors"
 	"github.com/rclone/rclone/lib/rest"
 	"go.uber.org/zap"
-	"golang.org/x/sync/errgroup"
 )
 
 var retryErrorCodes = []int{
@@ -452,107 +451,6 @@ func (u *UploadService) CreateRemoteDir(path string) error {
 	return nil
 }
 
-func (u *UploadService) readMetaDataForPath(path string, options *types.MetadataRequestOptions) (*types.ReadMetadataResponse, error) {
-
-	opts := rest.Opts{
-		Method: "GET",
-		Path:   "/api/files",
-		Parameters: url.Values{
-			"path":      []string{path},
-			"limit":     []string{strconv.FormatInt(options.Limit, 10)},
-			"sort":      []string{"id"},
-			"operation": []string{"list"},
-			"page":      []string{strconv.FormatInt(options.Page, 10)},
-		},
-	}
-	var err error
-	var info types.ReadMetadataResponse
-	var resp *http.Response
-
-	err = u.pacer.Call(func() (bool, error) {
-		resp, err = u.http.CallJSON(u.ctx, &opts, nil, &info)
-		return ShouldRetry(u.ctx, resp, err)
-	})
-	if err != nil && resp != nil && resp.StatusCode == 404 {
-		if u.isDryRun {
-			return &types.ReadMetadataResponse{
-				Meta: types.Meta{
-					Count:       0,
-					TotalPages:  0,
-					CurrentPage: 1,
-				},
-				Files: []types.FileInfo{},
-			}, nil
-		}
-
-		return nil, fs.ErrorDirNotFound
-	}
-
-	if err != nil {
-		return nil, err
-	}
-
-	return &info, nil
-}
-
-func (u *UploadService) list(path string) (files []types.FileInfo, err error) {
-	pageSize := int64(500)
-	opts := &types.MetadataRequestOptions{
-		Limit: pageSize,
-		Page:  1,
-	}
-
-	files = []types.FileInfo{}
-
-	info, err := u.readMetaDataForPath(path, opts)
-
-	if err != nil {
-		return nil, err
-	}
-
-	files = append(files, info.Files...)
-
-	mu := sync.Mutex{}
-	if info.Meta.TotalPages > 1 {
-		g, _ := errgroup.WithContext(u.ctx)
-
-		g.SetLimit(8)
-
-		for i := 2; i <= info.Meta.TotalPages; i++ {
-			page := i
-			g.Go(func() error {
-				opts := &types.MetadataRequestOptions{
-					Limit: pageSize,
-					Page:  int64(page),
-				}
-				info, err := u.readMetaDataForPath(path, opts)
-
-				if err != nil {
-					return err
-				}
-				mu.Lock()
-				files = append(files, info.Files...)
-				mu.Unlock()
-				return nil
-			})
-		}
-		if err := g.Wait(); err != nil {
-			return nil, err
-		}
-	}
-
-	return files, nil
-}
-
-func (u *UploadService) checkFileExistsInDirectory(name string, files []types.FileInfo) bool {
-	for _, item := range files {
-		if item.Name == name {
-			return true
-		}
-	}
-	return false
-}
-
 func (u *UploadService) UploadFilesInDirectory(sourcePath string, destDir string) error {
 	entries, err := os.ReadDir(sourcePath)
 	if err != nil {
@@ -561,12 +459,6 @@ func (u *UploadService) UploadFilesInDirectory(sourcePath string, destDir string
 	}
 
 	destDir = strings.ReplaceAll(destDir, "\\", "/")
-
-	filesInRemote, err := u.list(destDir)
-	if err != nil {
-		u.logger.Error("list remote files failed", zap.String("destDir", destDir), zap.Error(err))
-		return err
-	}
 
 	for _, entry := range entries {
 		fullPath := filepath.Join(sourcePath, entry.Name())
@@ -585,47 +477,36 @@ func (u *UploadService) UploadFilesInDirectory(sourcePath string, destDir string
 				continue
 			}
 		} else {
-			exists := u.checkFileExistsInDirectory(entry.Name(), filesInRemote)
-			if !exists {
-				dirID, err := u.GetDirectoryId(destDir)
+			dirID, err := u.GetDirectoryId(destDir)
+			if err != nil {
+				u.logger.Error("get directory id failed", zap.String("destDir", destDir), zap.Error(err))
+				return err
+			}
+
+			u.wg.Add(1)
+			u.concurrentFiles <- struct{}{}
+
+			go func(file os.DirEntry) {
+				defer u.wg.Done()
+				defer func() {
+					<-u.concurrentFiles
+				}()
+
+				err := u.UploadFile(fullPath, destDir, dirID)
 				if err != nil {
-					u.logger.Error("get directory id failed", zap.String("destDir", destDir), zap.Error(err))
-					return err
+					u.logger.Error("upload failed", zap.String("fullPath", fullPath), zap.Error(err))
+					return
 				}
 
-				u.wg.Add(1)
-				u.concurrentFiles <- struct{}{}
-
-				go func(file os.DirEntry) {
-					defer u.wg.Done()
-					defer func() {
-						<-u.concurrentFiles
-					}()
-
-					err := u.UploadFile(fullPath, destDir, dirID)
+				if u.deleteAfterUpload && !u.isDryRun {
+					err = os.Remove(fullPath)
 					if err != nil {
-						u.logger.Error("upload failed", zap.String("fullPath", fullPath), zap.Error(err))
+						u.logger.Error("delete file failed", zap.String("fullPath", fullPath), zap.Error(err))
 						return
 					}
-
-					if u.deleteAfterUpload && !u.isDryRun {
-						err = os.Remove(fullPath)
-						if err != nil {
-							u.logger.Error("delete file failed", zap.String("fullPath", fullPath), zap.Error(err))
-							return
-						}
-						u.logger.Info("deleted file", zap.String("fullPath", fullPath))
-					}
-				}(entry)
-			} else {
-				fileInfo, err := os.Stat(fullPath)
-				if err != nil {
-					u.logger.Error("stat for existing file failed", zap.String("fullPath", fullPath), zap.Error(err))
-					return err
+					u.logger.Info("deleted file", zap.String("fullPath", fullPath))
 				}
-				u.Progress.AddExisting(fileInfo.Size())
-				u.logger.Info("file in directory exists", zap.String("fullPath", fullPath))
-			}
+			}(entry)
 		}
 	}
 
